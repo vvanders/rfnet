@@ -247,6 +247,50 @@
                 }
             }
         },
+        "/msg/delete": {
+            "post": {
+                "tags": [ "messaging", "admin" ],
+                "operationId": "dmsg",
+                "security": [
+                    {
+                        "admin_api_key": []
+                    },
+                    {
+                        "user_api_key": []
+                    },
+                    {
+                        "rf_signature": []
+                    }
+                ],
+                "summary": "Deletes a specific message by id",
+                "consumes": [ "application/json" ],
+                "produces": [ "application/json" ],
+                "parameters": [
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "required": true,
+                        "schema": {
+                            "type":"object",
+                            "properties": {
+                                "id": {
+                                    "type": "integer",
+                                    "format":"int32"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": { 
+                        "description": "Success"
+                    },
+                    "403": {
+                        "description": "Signature verification failed or user does not have permission"
+                    }
+                }
+            }
+        },
         "/user/{callsign}/keys": {
             "get": {
                 "tags": [ "user", "auth" ],
