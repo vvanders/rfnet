@@ -1,4 +1,38 @@
 @startuml
+Node->Node: Start Operation
+
+Node->Link: CONTROL: Request Link
+Link->Node: CONTROL: Grant Link
+
+Node->Link: DATA 0
+Link->Node: ACK 0
+
+note over Node, Link: Repeat until all data frames complete
+
+Node->Link: DATA N
+Link->Node: ACK N
+
+Link->Internet: REST API or RF Raw packet
+Internet-->Link: HTTP 200
+
+Link->Node: ACK N (contains response)
+
+Link-->Node: Data 0
+Node-->Link: Ack 0
+
+note over Node, Link: Repeat until all data frames complete
+
+Link-->Node: Data N
+Node-->Link: Ack N
+
+Node->Node: Operation complete
+
+Node->Link: Close
+Link->Node: Closed
+
+@enduml
+
+@startuml
 
 participant Node
 participant RF
