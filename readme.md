@@ -44,11 +44,23 @@ PacketType:
  00: Link Broadcast
  01: Data
  10: Ack
- 11: Ext
+ 11: Ctrl
 
 Broadcast packet
-2b:(LINK_WIDTH+PacketType)|2b:GridSquare|4b:EpochTime|Nb:RepeaterId|(Nb+2b+2b+4b)*2:FEC
+1b:(PacketType+FEC_ENABLED+RETRY_ENABLED)|2b:(MajorVer+MinorVer)|2b:LINK_WIDTH|Nb:HubId|(Nb+1b+2b+2b)*2:FEC
 
+Control packet
+
+Control type:
+ 1: Link request ->
+ 2: Link opened <-
+ 3: Link close ->
+ 4: Link clear <-
+ 5: Notification <-
+
+1b:(PacketType+ControlType)|Nb:Callsign|(Nb+1)*2:FEC
+
+Data packet
 Parameters:
     LINK_WIDTH: nominally 256 bytes but can be changed to adjust to native framing size
     FEC_BYTES: 2,4,6,8,16,32,64 number of bytes of FEC
@@ -62,9 +74,15 @@ Parameters:
 2b:(PacketIdx or SequenceId if StartFlag is set+PacketType)|1b:BLOCK_SIZE+FEC_BYTES+START_FLAG+END_FLAG|(1b+2b)*2:HeaderFEC|LINK_WIDTH-(FEC_BYTES+3b+6b):payload|FEC_BYTES:FEC
 
 Ack packet
-2b:(SequenceId+PacketType)|2b:(PacketIdx+Nack flag)|1b:CorrectedErrors|10b:FEC
+2b:(SequenceId+PacketType)|2b:(PacketIdx+NackFlag+NoResponseFlag)|1b:CorrectedErrors|10b:FEC
 
 ## RF Net Packet Spec
+
+Request:
+  64b:sign|2b:sequenceId|Callsign@hub\0hub\0payload
+
+Response:
+  2b:sequenceId|payload
 
 ## Supported Radios
 

@@ -1,0 +1,775 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Documentation for RF NET Link REST API",
+        "version": "1.0.0",
+        "title": "RF NET Link API",
+        "contact": {
+            "email": "valere.vanderschaegen@gmail.com"
+        }
+    },
+    "host": "TBD",
+    "basePath": "/v1",
+    "securityDefinitions": {
+        "link_api_key": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        },
+        "admin_api_key": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    },
+    "tags": [
+        {
+            "name": "messaging",
+            "description": "Messaging operations including direct messages, broadcast and threads"
+        },
+        {
+            "name": "telemetry",
+            "description": "Telemetry operations"
+        },
+        {
+            "name": "admin",
+            "description": "Administrative operations"
+        },
+        {
+            "name": "user",
+            "description": "User operations"
+        },
+        {
+            "name": "hub",
+            "description": "Hub operations"
+        }
+    ],
+    "paths": {
+        "/msg/{hub_name}": {
+            "post": {
+                "tags": [ "messaging" ],
+                "operationId": "bmsg",
+                "summary": "Broadcasts a message to all users on a hub",
+                "consumes": [ "application/json" ],
+                "produces": [ "application/json" ],
+                "parameters": [
+                    {
+                        "$ref": "#/definitions/PathHubName"
+                    },
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/BroadcastMsg"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": { 
+                        "description": "Success"
+                    },
+                    "403": {
+                        "description": "Signature verification failed"
+                    },
+                    "405": {
+                        "description": "Invalid input"
+                    }
+                }
+            }
+        },
+        "/msg/{hub_name}/list": {
+            "get" : {
+                "tags": [ "messaging" ],
+                "operationId": "lmsg",
+                "summary": "Retreives the list of broadcast messages",
+                "consumes": ["application/json"],
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "$ref":"#/definitions/PathHubName"
+                    },
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref":"#/definitions/ListMessage"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200":{
+                        "description":"Success",
+                        "schema": {
+                            "$ref":"#/definitions/MessageList"
+                        }
+                    }
+                }
+            }
+        },
+        "/dmsg/{callsign}": {
+            "post": {
+                "tags": [ "messaging" ],
+                "operationId": "dmsg",
+                "summary": "Send a directed message to a callsign on this hub",
+                "consumes": [ "application/json" ],
+                "produces": [ "application/json" ],
+                "parameters": [
+                    {
+                        "$ref": "#/definitions/PathCallsign"
+                    },
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/DirectedMsg"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": { 
+                        "description": "Success"
+                    },
+                    "403": {
+                        "description": "Signature verification failed"
+                    },
+                    "404": {
+                        "description": "No such user exists on this hub"
+                    },
+                    "405": {
+                        "description": "Invalid input"
+                    }
+                }
+            }
+        },
+        "/dmsg/{callsign}/list": {
+            "get" : {
+                "tags": [ "messaging" ],
+                "operationId": "lmsg",
+                "summary": "Retreives the list of messages to a specific user",
+                "consumes": ["application/json"],
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "$ref": "#/definitions/PathCallsign"
+                    },
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref":"#/definitions/ListMessage"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200":{
+                        "description":"Success",
+                        "schema": {
+                            "$ref":"#/definitions/MessageList"
+                        }
+                    },
+                    "403":{
+                        "description":"The user doesn't have permission to view message history"
+                    }
+                }
+            }
+        },
+        "/msg/attachment/{id}": {
+            "get": {
+                "tags": [ "messaging" ],
+                "operationId": "amsg",
+                "summary": "Fetches an attachment associated with a message",
+                "consumes": [ "application/json" ],
+                "produces": [ "application/json" ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32"
+                        },
+                        "example": 12345
+                    }
+                ],
+                "responses": {
+                    "200": { 
+                        "description": "Success",
+                        "schema": {
+                            "type":"object",
+                            "properties": {
+                                "attachmentType": {
+                                    "type": "string",
+                                    "description": "MIME type of the attachment if this message has one",
+                                    "example": "image/jpeg"
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "format": "byte",
+                                    "example": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3OA=="
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No such attachment exists"
+                    }
+                }
+            }
+        },
+        "/user/{callsign}/keys": {
+            "get": {
+                "tags": [ "user" ],
+                "operationId": "kuser",
+                "summary": "Gets public keys registered to a callsign",
+                "consumes": [ "application/json" ],
+                "produces": [ "application/json" ],
+                "parameters": [
+                    {
+                        "$ref": "#/definitions/PathCallsign"
+                    }
+                ],
+                "responses": {
+                    "200": { 
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/UserKeys"
+                        }
+                    },
+                    "404": {
+                        "description": "Callsign does not exist"
+                    }
+                }
+            }
+        },
+        "/user/{callsign}/info": {
+            "get": {
+                "tags": [ "user" ],
+                "operationId": "iuser",
+                "summary": "Gets info associated with a user",
+                "consumes": [ "application/json" ],
+                "produces": [ "application/json" ],
+                "parameters": [
+                    {
+                        "$ref": "#/definitions/PathCallsign"
+                    }
+                ],
+                "responses": {
+                    "200": { 
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "integer",
+                                    "format": "int32"
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "description": "Global user message",
+                                    "example": "KI7EST located in SW WA state"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Callsign does not exist"
+                    }
+                }
+            }
+        },
+        "/user/{callsign}/set_prop": {
+            "post": {
+                "tags": ["user"],
+                "security": [
+                    {
+                        "admin_api_key": []
+                    },
+                    {}
+                ],
+                "operationId": "puser",
+                "summary": "Sets a property on a callsign",
+                "consumes": [ "application/json" ],
+                "produces": [ "application/json" ],
+                "parameters": [
+                    {
+                        "$ref": "#/definitions/PathCallsign"
+                    },
+                    {
+                        "in":"body",
+                        "name":"body",
+                        "schema": {
+                            "type":"object",
+                            "required": ["property", "value"],
+                            "properties": {
+                                "property": {
+                                    "type":"string",
+                                    "description": "Property to set",
+                                    "enum": [
+                                        "status",
+                                        "email"
+                                    ],
+                                    "example":"email"
+                                },
+                                "value":{
+                                    "type":"string",
+                                    "example":"valere.vanderschaegen@gmail.com"
+                                },
+                                "signature": {
+                                    "$ref": "#/definitions/Signature"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": { 
+                        "description": "Success"
+                    },
+                    "403": {
+                        "description": "API Key or signature failed"
+                    },
+                    "404": {
+                        "description": "Callsign does not exist"
+                    }
+                }
+            }
+        },
+        "/user/create": {
+            "post": {
+                "tags": ["user"],
+                "security": [{
+                    "link_api_key": []
+                }],
+                "operationId": "cuser",
+                "summary": "Starts the creation of a new callsign on this hub",
+                "consumes": ["application/json"],
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "callsign": {
+                                    "type": "string",
+                                    "example": "KI7EST"
+                                },
+                                "email": {
+                                    "type": "string",
+                                    "example": "valere.vanderschaegen@gmail.com"
+                                },
+                                "public_key": {
+                                    "$ref":"#/definitions/PublicKey"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200" : {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "challenge_token": {
+                                    "$ref": "#/definitions/ChallengeToken"
+                                }
+                            }
+                        }
+                    },
+                    "405": {
+                        "description": "Callsign already exists"
+                    }
+                }
+            }
+        },
+        "/users/create_challenge": {
+            "post": {
+                "tags": ["user"],
+                "security": [{
+                    "link_api_key": []
+                }],
+                "operationId": "cuser",
+                "summary": "Completes registration of a new callsign on this hub",
+                "consumes": ["application/json"],
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "challenge_token": {
+                                    "$ref": "#/definitions/ChallengeToken"
+                                },
+                                "signature": {
+                                    "$ref":"#/definitions/Signature"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200" : {
+                        "description": "Success"
+                    },
+                    "403": {
+                        "description": "Failed to authenticate challenge token"
+                    }
+                }
+            }
+        },
+        "/hub/list": {
+            "get": {
+                "tags": ["hub"],
+                "operationId":"hlist",
+                "summary": "List hubs hosted on this server",
+                "consumes":["application/json"],
+                "produces":["application/json"],
+                "parameters": [],
+                "responses":{
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/HubList"
+                        }
+                    }
+                }
+            }
+        },
+        "/hub/info": {
+            "get": {
+                "tags": ["hub"],
+                "operationId":"hinfo",
+                "summary": "List info associated with a hub",
+                "consumes":["application/json"],
+                "produces":["application/json"],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "$ref":"#/definitions/HubId"
+                        }
+                    }
+                ],
+                "responses":{
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/Hub"
+                        }
+                    }
+                }
+            }
+        },
+        "/hub/create": {
+            "post": {
+                "tags": ["admin"],
+                "security": [{
+                    "admin_api_key": []
+                }],
+                "operationId":"hcreate",
+                "consumes":["application/json"],
+                "produces":["application/json"],
+                "summary":"Creates a new hub",
+                "parameters": [
+                    {
+                        "in":"body",
+                        "name":"body",
+                        "schema": {
+                            "type":"object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "example": "W7DG"
+                                },
+                                "admins": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref":"#/definitions/UserId"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description":"Success"
+                    },
+                    "403": {
+                        "description":"Permission denied"
+                    }
+                }
+            }
+        },
+        "/hub/delete": {
+            "post": {
+                "tags": ["admin"],
+                "security": [{
+                    "admin_api_key": []
+                }],
+                "operationId":"hcreate",
+                "consumes":["application/json"],
+                "produces":["application/json"],
+                "summary": "Deletes an existing hub",
+                "parameters": [
+                    {
+                        "in":"body",
+                        "name":"body",
+                        "schema": {
+                            "type":"object",
+                            "properties": {
+                                "id": {
+                                    "$ref":"#/definitions/HubId"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description":"Success"
+                    },
+                    "403": {
+                        "description":"Permission denied"
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "DirectedMsg": {
+            "type": "object",
+            "required": [
+                "sender",
+                "destination",
+                "content",
+                "hasAttachment",
+                "signature"
+            ],
+            "properties": {
+                "sender": {
+                    "$ref": "#/definitions/CallsignAddress"
+                },
+                "destination": {
+                    "$ref": "#/definitions/Callsign"
+                },
+                "content": {
+                    "$ref": "#/definitions/MessageContent"
+                },
+                "attachmentType": {
+                    "type": "string",
+                    "description": "MIME type of the attachment if this message has one",
+                    "example": "image/jpeg"
+                },
+                "attachmentLength": {
+                    "type": "integer",
+                    "format": "int32",
+                    "example": 1440,
+                    "description": "Length of the attachment, in bytes"
+                },
+                "signature": {
+                    "$ref": "#/definitions/Signature"
+                }
+            }
+        },
+        "BroadcastMsg": {
+            "type": "object",
+            "required": [
+                "sender",
+                "content",
+                "signature"
+            ],
+            "properties": {
+                "sender": {
+                    "$ref": "#/definitions/CallsignAddress"
+                },
+                "content": {
+                    "$ref": "#/definitions/MessageContent"
+                },
+                "attachmentType": {
+                    "type": "string",
+                    "description": "MIME type of the attachment if this message has one",
+                    "example": "image/jpeg"
+                },
+                "attachmentLength": {
+                    "type": "integer",
+                    "format": "int32",
+                    "example": 1440,
+                    "description": "Length of the attachment, in bytes"
+                },
+                "signature": {
+                    "$ref": "#/definitions/Signature"
+                }
+            }
+        },
+        "UserKeys": {
+            "type": "object",
+            "properties": {
+                "public_keys": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/PublicKey"
+                    }
+                }
+            }
+        },
+        "ListMessage": {
+            "type": "object",
+            "properties": {
+                "firstId": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "ID of the first message to return. Messages are returned in chronological order up to count items"
+                },
+                "count": {
+                    "type": "integer",
+                    "format": "int32",
+                    "example": 10,
+                    "description": "Number of items to return, capped at 100"
+                }
+            }
+        },
+        "MessageList": {
+            "type": "array",
+            "items": {
+                "$ref": "#/definitions/Message"
+            }
+        },
+        "HubList": {
+            "type": "array",
+            "items": {
+                "$ref":"#/definitions/Hub"
+            }
+        },
+        "Callsign": {
+            "type": "string",
+            "example": "KI7EST"
+        },
+        "CallsignAddress": {
+            "type": "string",
+            "example": "KI7EST@rfnet.net"
+        },
+        "MessageContent": {
+            "type": "string",
+            "example": "This is a message"
+        },
+        "Signature": {
+            "type": "string",
+            "format": "byte",
+            "description": "BASE64 encoded signed signature of message contents that can be verified with sender's private key.",
+            "example": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3OA=="
+        },
+        "PublicKey": {
+            "type": "string",
+            "format": "byte",
+            "description": "BASE64 encoded public key.",
+            "example": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2Nzg="
+        },
+        "Message": {
+            "type": "object",
+            "required":[
+                "id",
+                "sender",
+                "content",
+                "timestamp"
+            ],
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "format":"int32"
+                },
+                "sender": {
+                    "$ref":"#/definitions/CallsignAddress"
+                },
+                "destination": {
+                    "$ref":"#/definitions/CallsignAddress"
+                },
+                "content": {
+                    "$ref":"#/definitions/MessageContent"
+                },
+                "attachmentType": {
+                    "type": "string",
+                    "description": "MIME type of the attachment if this message has one",
+                    "example": "image/jpeg"
+                },
+                "attachmentLength": {
+                    "type": "integer",
+                    "format": "int32",
+                    "example": 1440,
+                    "description": "Length of the attachment, in bytes"
+                },
+                "timestamp": {
+                    "type":"integer",
+                    "format":"int32",
+                    "description":"Time the message was posted in unix epoch format",
+                    "example": 1515804648
+                },
+                "link_source": {
+                    "type": "string",
+                    "example": "KI7EST-CN85",
+                    "description": "Name of the link where this message was received"
+                }
+            }
+        },
+        "Hub": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "example": "W7DG",
+                    "description": "Hub to target, can be left blank to target the root hub"
+                },
+                "id": {
+                    "$ref": "#/definitions/HubId"
+                }
+            }
+        },
+        "HubId": {
+            "type": "integer",
+            "format": "int32"
+        },
+        "UserId": {
+            "type": "integer",
+            "format": "int32"
+        },
+        "PathCallsign": {
+            "in": "path",
+            "name": "callsign",
+            "required": true,
+            "schema": {
+                "type": "string"
+            },
+            "example": "KI7EST"
+        },
+        "ChallengeToken": {
+            "type": "string",
+            "format": "byte",
+            "description": "32 byte BASE64 encoded string that should be signed with the private key and returned to /user/create_challenge",
+            "example": "ODc2NTQzMjE4NzY1NDMyMTg3NjU0MzIxODc2NTQzMjE="
+        },
+        "PathHubName": {
+            "in": "path",
+            "name": "hub_name",
+            "required": false,
+            "schema": {
+                "type": "string"
+            },
+            "example": "W7DG",
+            "description": "Hub to target, can be left blank to target the root hub"
+        }
+    }
+
+}
