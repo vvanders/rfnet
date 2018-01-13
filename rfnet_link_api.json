@@ -20,16 +20,22 @@
             "type": "apiKey",
             "name": "Authorization",
             "in": "header"
+        },
+        "user_api_key": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        },
+        "rf_signature": {
+            "type": "apiKey",
+            "name": "RFSignature",
+            "in": "header"
         }
     },
     "tags": [
         {
             "name": "messaging",
-            "description": "Messaging operations including direct messages, broadcast and threads"
-        },
-        {
-            "name": "telemetry",
-            "description": "Telemetry operations"
+            "description": "Messaging operations including direct and broadcast messages"
         },
         {
             "name": "admin",
@@ -42,6 +48,10 @@
         {
             "name": "hub",
             "description": "Hub operations"
+        },
+        {
+            "name": "auth",
+            "description": "Authentication operations"
         }
     ],
     "paths": {
@@ -49,6 +59,14 @@
             "post": {
                 "tags": [ "messaging" ],
                 "operationId": "bmsg",
+                "security": [
+                    {
+                        "user_api_key": []
+                    },
+                    {
+                        "rf_signature": []
+                    }
+                ],
                 "summary": "Broadcasts a message to all users on a hub",
                 "consumes": [ "application/json" ],
                 "produces": [ "application/json" ],
@@ -112,6 +130,14 @@
             "post": {
                 "tags": [ "messaging" ],
                 "operationId": "dmsg",
+                "security": [
+                    {
+                        "user_api_key": []
+                    },
+                    {
+                        "rf_signature": []
+                    }
+                ],
                 "summary": "Send a directed message to a callsign on this hub",
                 "consumes": [ "application/json" ],
                 "produces": [ "application/json" ],
@@ -223,7 +249,7 @@
         },
         "/user/{callsign}/keys": {
             "get": {
-                "tags": [ "user" ],
+                "tags": [ "user", "auth" ],
                 "operationId": "kuser",
                 "summary": "Gets public keys registered to a callsign",
                 "consumes": [ "application/json" ],
@@ -284,12 +310,17 @@
         },
         "/user/{callsign}/set_prop": {
             "post": {
-                "tags": ["user"],
+                "tags": ["user", "admin"],
                 "security": [
                     {
                         "admin_api_key": []
                     },
-                    {}
+                    {
+                        "user_api_key": []
+                    },
+                    {
+                        "rf_signature": []
+                    }
                 ],
                 "operationId": "puser",
                 "summary": "Sets a property on a callsign",
@@ -303,24 +334,29 @@
                         "in":"body",
                         "name":"body",
                         "schema": {
-                            "type":"object",
-                            "required": ["property", "value"],
+                            "type": "object",
                             "properties": {
-                                "property": {
-                                    "type":"string",
-                                    "description": "Property to set",
-                                    "enum": [
-                                        "status",
-                                        "email"
-                                    ],
-                                    "example":"email"
-                                },
-                                "value":{
-                                    "type":"string",
-                                    "example":"valere.vanderschaegen@gmail.com"
-                                },
-                                "signature": {
-                                    "$ref": "#/definitions/Signature"
+                                "props": {
+                                    "type": "array",
+                                    "items": {
+                                        "type":"object",
+                                        "required": ["property", "value"],
+                                        "properties": {
+                                            "property": {
+                                                "type":"string",
+                                                "description": "Property to set",
+                                                "enum": [
+                                                    "status",
+                                                    "email"
+                                                ],
+                                                "example":"email"
+                                            },
+                                            "value":{
+                                                "type":"string",
+                                                "example":"valere.vanderschaegen@gmail.com"
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -390,7 +426,7 @@
                 }
             }
         },
-        "/users/create_challenge": {
+        "/user/create_challenge": {
             "post": {
                 "tags": ["user"],
                 "security": [{
@@ -424,6 +460,57 @@
                     },
                     "403": {
                         "description": "Failed to authenticate challenge token"
+                    }
+                }
+            }
+        },
+        "/user/authenticate": {
+            "post": {
+                "tags": ["user"],
+                "operationId": "auth",
+                "summary": "Returns an User/Admin API token on successful authentication",
+                "consumes": ["application/json"],
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "callsign": {
+                                    "$ref": "#/definitions/Callsign"
+                                },
+                                "password": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200" : {
+                        "description": "Success",
+                        "schema": {
+                            "type":"object",
+                            "properties": {
+                                "apikey": {
+                                    "type": "string",
+                                    "description": "API key to use in header",
+                                    "example": "APIKEY"
+                                },
+                                "expires": {
+                                    "type": "integer",
+                                    "format": "int32",
+                                    "description": "Time that this key expires in unix epoch format",
+                                    "example": 1515861979
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Failed to authenticate"
                     }
                 }
             }
@@ -547,6 +634,44 @@
                     }
                 }
             }
+        },
+        "/verify": {
+            "post": {
+                "tags": [  "auth" ],
+                "operationId": "kuser",
+                "summary": "Validates signature from a request against a specific callsign",
+                "consumes": [ "application/json" ],
+                "produces": [ "application/json" ],
+                "parameters": [
+                    {
+                        "in":"body",
+                        "name":"body",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "callsign": {
+                                    "$ref": "#/definitions/Callsign"
+                                },
+                                "request": {
+                                    "type": "string",
+                                    "description": "Request content to verify signature against"
+                                },
+                                "signature": {
+                                    "$ref": "#/definitions/Signature"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": { 
+                        "description": "Signature matches callsign provided"
+                    },
+                    "403": {
+                        "description": "Signature did not match provided private key"
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -556,8 +681,7 @@
                 "sender",
                 "destination",
                 "content",
-                "hasAttachment",
-                "signature"
+                "hasAttachment"
             ],
             "properties": {
                 "sender": {
@@ -574,14 +698,11 @@
                     "description": "MIME type of the attachment if this message has one",
                     "example": "image/jpeg"
                 },
-                "attachmentLength": {
-                    "type": "integer",
-                    "format": "int32",
-                    "example": 1440,
-                    "description": "Length of the attachment, in bytes"
-                },
-                "signature": {
-                    "$ref": "#/definitions/Signature"
+                "attachment": {
+                    "type": "string",
+                    "format": "byte",
+                    "example": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3OA==",
+                    "description": "BASE64 encoded file"
                 }
             }
         },
@@ -589,8 +710,7 @@
             "type": "object",
             "required": [
                 "sender",
-                "content",
-                "signature"
+                "content"
             ],
             "properties": {
                 "sender": {
@@ -604,14 +724,11 @@
                     "description": "MIME type of the attachment if this message has one",
                     "example": "image/jpeg"
                 },
-                "attachmentLength": {
-                    "type": "integer",
-                    "format": "int32",
-                    "example": 1440,
-                    "description": "Length of the attachment, in bytes"
-                },
-                "signature": {
-                    "$ref": "#/definitions/Signature"
+                "attachment": {
+                    "type": "string",
+                    "format": "byte",
+                    "example": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3OA==",
+                    "description": "BASE64 encoded file"
                 }
             }
         },
@@ -669,7 +786,7 @@
         "Signature": {
             "type": "string",
             "format": "byte",
-            "description": "BASE64 encoded signed signature of message contents that can be verified with sender's private key.",
+            "description": "BASE64 encoded signed signature of message body that can be verified with sender's public key.",
             "example": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2NzgxMjM0NTY3OA=="
         },
         "PublicKey": {

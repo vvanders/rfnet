@@ -90,3 +90,7 @@ Response:
 * KISS TNC 9600pbs K9NG (APRS)
 * DSTAR 1200bps GMSK
 * FaradyRF 500,000bps 2FSK
+
+## REST API
+/Verifiy
+ auth tag
