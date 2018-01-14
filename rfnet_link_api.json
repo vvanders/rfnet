@@ -698,6 +698,8 @@
                                 },
                                 "request": {
                                     "type": "string",
+                                    "format": "byte",
+                                    "example": "TIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4",
                                     "description": "Request content to verify signature against"
                                 },
                                 "signature": {

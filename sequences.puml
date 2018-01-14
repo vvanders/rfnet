@@ -10,7 +10,6 @@ Link->Node: ACK 0
 note over Node, Link: Repeat until all data frames complete
 
 Node->Link: DATA N
-Link->Node: ACK N
 
 Link->Internet: REST API or RF Raw packet
 Internet-->Link: HTTP 200
