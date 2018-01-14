@@ -390,9 +390,3 @@ as long a standard timeouts are respected.
      │Node│                                            │RF│                                            │Link│                                          │Hub│          │testdomain.com│
      └────┘                                            └──┘                                            └────┘                                          └───┘          └──────────────┘
 ```
-
-
-## Supported Radios
-
-* KISS TNC 1200bsp AFSK (APRS)
-* KISS TNC 9600pbs K9NG (APRS)
