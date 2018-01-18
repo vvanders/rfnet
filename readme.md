@@ -220,7 +220,7 @@ The Hub of RF NET is a independently run host that provides a few key services o
 * Message routing and storage for direct callsign to callsign messages.
 * Discussion area for broadcast based messages based on club, location or specific interest.
 
-All of these features are provided via an REST API described in this [Swagger Description](https://github.com/vvanders/rfnet/blob/master/rfnet_link_api.json).
+All of these features are provided via an REST API described in this [Swagger Description](https://cdn.rawgit.com/vvanders/rfnet/292abfe3/docs/index.html).
 
 ## RF NET typical sequence
 Below is a diagram of a typical sequence of packets for a single request from a Node. Multiple requests can be chained together inside of a Link request
