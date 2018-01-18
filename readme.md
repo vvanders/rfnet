@@ -10,6 +10,9 @@ RF NET is a community oriented ham radio technology for local and long distance 
 * Full public/private key verification. Remotely control any REST API with the security of knowing only your callsign can access public endpoints.
 * All RF NET features are accessible from any radio or directly from the internet.
 
+## This is a rough draft and not final!
+At this stage we're actively looking for feedback and input on what's people think is important in a communication protocol. If there's something that jumps out at you please feel free to open an issue or submit a PR!
+
 ## High level goals
 RF NET has a few core ideas that are focused towards building a network that is robust and extensible.
 
