@@ -1,6 +1,15 @@
 # RF NET
 RF NET is a community oriented ham radio technology for local and long distance digital communcation. RF NET aims to unify a wide range of disparate technologies in a single place. No matter if you're running APRS, a custom modulation, on your desktop or smartphone. You'll always have access to the RF NET network.
 
+## What can I do with RF NET?
+* Messaging with no length limits and full support for UTF-8.
+* Persistent Messaging via independent RF NET Hub servers.
+* Support for data attachments including images, documents and any form of binary data.
+* Coordination via Club/Interest spaces hosted on RF NET Hub.
+* The ability to make REST calls(and responses) from any Radio. Want to get NOAA weather far from home? Get it directly from NOAA REST API.
+* Full public/private key verification. Remotely control any REST API with the security of knowing only your callsign can access public endpoints.
+* All RF NET features are accessible from any radio or directly from the internet.
+
 ## High level goals
 RF NET has a few core ideas that are focused towards building a network that is robust and extensible.
 
@@ -63,9 +72,9 @@ RF NET is designed to work with a wide range of digital communcation formats. Re
 * Channel control is arbitrated by RF NET Link with Nodes requesting open channel.
 
 Broadly speaking this means that RF NET can support any of the following:
-* All KISS based TNCs including nearly all radios that support an external APRS interface.
+* All KISS based TNCs including nearly any radios that support an external APRS interface.
 * Virtual TNCs such as Direwolf for sending digital data over analog radio inputs.
-* Forward-looking radios like FaradayRF that support even higher data rates than traditionally found in modern ham trancievers.
+* Forward-looking radios like FaradayRF that support even higher data rates than traditionally found in modern ham transceivers.
 
 Even with this wide range of radios using different baud, modulation and frequency RF NET's architecture gaurantees interoperatiblity between any user using RF NET.
 
@@ -89,14 +98,14 @@ This is the state when nothing has been heard on the channel for at least 10 sec
 ### Negotiating State
 This is the state that a Node transitions to from Idle when it wants to establish a communcation with a Link. This is started by sending the Link Request Control Packet. Note that if a node doesn't hear an acknowledgment in the span of 10 seconds or hears another packet it will revert back to the Listening State.
 
-Nodes are free to send multiple Request Link Control Packets during the negotiating period.
+Nodes are free to send multiple Link Request Control Packets during the negotiating period.
 
 ### Established State
 This state marks that a Node has heard a Link Opened Control Packet from the Link and is clear to start transmitting data packets.
 
 This state may be active for a long time depending on the amount of data being transferred between the Node and the Link. In order to prevent one Node from capitalizing on all the available channel time the Link will periodically pause responses(either Ack or Data) and send a Node Waiting Control Packet.
 
-The Node Waiting control packet signals that the Link is opening up the channel for another available nodes. If nothing is heard in 20*(168/baud) seconds the communcation resumes as normal.
+The Node Waiting control packet signals that the Link is opening up the channel for other available nodes. If nothing is heard in 20*(168/baud) seconds the communcation resumes as normal.
 
 If a Link Request Control Packet is heard and acknowledged then the currently transmitting link will go into the Suspended State pausing all current communcations.
 
@@ -200,9 +209,18 @@ One of the unique things that RF NET brings as a protocol is the ability to defi
 
 When a Node sends a fully sequenced packet to a Link the Link will perform a couple extra steps to verify the sender is legitimate:
 1. When a Node sends a packet it signs the packet with a Private Key that is secret and known only to the user of the Node client. It never leaves the radio or is uploaded to the internet at any point.
-2. The Link verifies that the SequenceId matches SessionId+Number of packets received. The SessionId is chosen randomly on each new connection and mitigates the chance of a replay attack using the same packet on a different link.
+2. The Link verifies that the SequenceId matches SessionId+Number of packets received. The SessionId is chosen randomly on each new connection and mitigates the chance of a replay attack using the same packet data on a different Link.
 3. The Link queries the Hub for the Public Keys of the Callsign provided by "callsign@hub" in the packet.
 4. The Link performs a signature verification with the Signature, Payload and Public Key. If they all match the Link will execute the command. Otherwise the Link will notify the sender that the private key is not valid for that callsign and hub.
+
+## RF NET Hub
+The Hub of RF NET is a independently run host that provides a few key services of the protocol:
+* Callsign registration.
+* Callsign verification via published Public Keys.
+* Message routing and storage for direct callsign to callsign messages.
+* Discussion area for broadcast based messages based on club, location or specific interest.
+
+All of these features are provided via an REST API described in this [Swagger Description](https://github.com/vvanders/rfnet/blob/master/rfnet_link_api.json).
 
 ## RF NET typical sequence
 Below is a diagram of a typical sequence of packets for a single request from a Node. Multiple requests can be chained together inside of a Link request
