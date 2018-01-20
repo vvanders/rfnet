@@ -3,7 +3,7 @@ RF NET is a community oriented ham radio technology for local and long distance 
 
 ## What can I do with RF NET?
 * Messaging with no length limits and full support for UTF-8.
-* Persistent Messaging via independent RF NET Hub servers.
+* Persistent Messages/Data via independent RF NET Hub servers.
 * Support for data attachments including images, documents and any form of binary data.
 * Coordination via Club/Interest spaces hosted on RF NET Hub.
 * The ability to make REST calls(and responses) from any Radio. Want to get NOAA weather far from home? Get it directly from NOAA REST API.
@@ -25,6 +25,7 @@ RF NET has a few core ideas that are focused towards building a network that is 
 * Message routing and offline delivery via e-mail like addressing schema. Ex: "KI7EST@rfnethub.net"
 * Support for community spaces to enable local clubs to communcate, coordiate events or build a meeting space around a common interest.
 * Automatic discovery of link parameters via periodic broadcast packets.
+* Multi-mode support over a single link. Support clients of either 1200bps or 9600bps on the same frequency.
 
 ## Network overview
 ```
