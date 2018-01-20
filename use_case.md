@@ -16,7 +16,7 @@ RF NET supports authenticated REST API calls as a first-class citizen in the pro
 
 Want to post a tweet from your radio up on the mountain? RF NET's strong authentication makes it possible to send a tweet and *know* that it came from your radio and no-one else.
 
-Need to control a repeater or other internet connected hardware with confidence? Use RF NET's authentication API to verfiy that your REST calls are coming from a secure radio.
+Need to control a repeater or other internet connected hardware with confidence? Want to send telemetry data to a public endpoint on the internet? Use RF NET's authentication API to verfiy that your REST calls are coming from a secure radio.
 
 ## Group messaging
 All of the features found in direct messaging(routing, confirmation, data attachments) are also available in a group messaging format. Groups based on your local club, common interest or other areas can be registered on any RF NET Hub. You can then check them from your radio at any time.
