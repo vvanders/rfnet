@@ -4,4 +4,8 @@ version = "0.1.0"
 authors = ["Val Vanderschaegen <valere.vanderschaegen@gmail.com>"]
 
 [dependencies]
+log = "0.4.1"
 iron = "0.6.0"
+router = "0.6.0"
+staticfile = "0.5.0"
+websocket = "0.20.2"

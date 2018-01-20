@@ -44,6 +44,21 @@
                 "kind": "test",
                 "isDefault": true
             }
+        },
+        {
+            "type": "shell",
+            "taskName": "cargo run",
+            "command": "cargo",
+            "args": [
+                "run"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": {
+                "kind": "run",
+                "isDefault": true
+            }
         }
     ]
 }

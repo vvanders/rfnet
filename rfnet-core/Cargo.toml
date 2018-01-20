@@ -5,3 +5,5 @@ authors = ["Val Vanderschaegen <valere.vanderschaegen@gmail.com>"]
 
 [dependencies]
 log = "0.4.1"
+byteorder = "1.2.1"
+reed-solomon = "0.2.1"
