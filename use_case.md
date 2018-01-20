@@ -4,12 +4,14 @@ RF NET is designed to open a wide range of new ham radio opporunities through it
 ## Direct Messaging
 RF NET supports messaging through simple addressing that looks much like an email address. Simply send a message to "callsign@hub"(EX: "KI7EST@rfnethub.net") and the message will be routed to the respective server(hub) and stored there until the recipient can retrieve it. If the callsign was recently heard on a RF NET Link that link will attempt to notify the user that a new message is available.
 
-Messages also support artibray data attachements. You can include images, spreadsheets or any other binary data that you want to convey.
+Messages also support artibray data attachments. You can include images, spreadsheets or any other binary data that you want to convey.
 
 ## Robust modulation, error correction and multi-mode support
 RF NET is modulation independent. This means as long as you can reach a RF NET Link that supports your radio's modulation you can access RF NET. Support for 1200, 9600 radios that use KISS AX.25 TNCs works out of the box and faster modes through radios such as FaradayRF will be possible as well.
 
 In addition to modulation independece RF NET also supports multi-mode. This means that multiple modulation techniques can be used on the same broadcast frequency. Both 1200 and 9600 bps radios will be able to access the same RF NET Link on the same frequency. A RF NET Link is able to distinguish this through CSMA and HDLC framing letting you use the fastest speed possible for your radio.
+
+Lastly RF NET has Forward Error Correction built-in so that it can communicate over links that may be less than ideal. RF NET supports up to 2x FEC rates allowing a full recovery of up to 1/3 of a packet from a noisy link or interference. RF NET can punch through conditions that are not feasible with other protocols like APRS.
 
 ## Get weather forecast, tweet from your radio and connect to the wider internet through RF NET
 RF NET supports authenticated REST API calls as a first-class citizen in the protocol spec. Want to know the upcoming weather but outside of cellphone range? Make a call to NOAA's forecast API and find the high/low and upcoming weather conditions.
