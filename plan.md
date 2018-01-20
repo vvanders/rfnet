@@ -20,9 +20,12 @@
     2. [ ] Docker based deployment/env.
     3. [ ] Migrate #4 to framework.
     4. [ ] Implement REST APIs.
-6. [ ] TUN based interface for FaradayRF radios.
+6. [ ] TUN based interface for [FaradayRF](https://faradayrf.com/) radios.
 7. [ ] Serial port KISS support.
-8. [ ] Integrated modulation from Direwolf to simplify setup.
+8. [ ] Raspberry Pi port of RF Net Node+Link.
+9. [ ] Android port of RF Net Node.
+10. [ ] Android port of RF Net Link.
+11. [ ] Integrated modulation from Direwolf to simplify setup.
 
 # Future features
 * API Key storage + fowarding - Allow safe way to call REST APIs that use api keys without sending key over the radio. Centralized around the Hub you have your callsign registered to.
