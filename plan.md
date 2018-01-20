@@ -33,3 +33,4 @@
 * API Key storage + fowarding - Allow safe way to call REST APIs that use api keys without sending key over the radio. Centralized around the Hub you have your callsign registered to.
 * OAUTH Key storage + forwarding - Same as above bit for OAuth(opens up things like Twitter, etc).
 * Broadcast messages - Provide better experience for real-time two-way communcation.
+* Duplex communcation through cross-band capable radios.
