@@ -3,7 +3,7 @@ import WebSocket
 
 type alias Model = {
     socketAddr: String,
-    lastLog: String
+    log: List String
 }
 
 type Msg  = NewMessage String
@@ -25,22 +25,21 @@ init flags =
     (
         {
             socketAddr = flags.socket,
-            lastLog = ""
+            log = []
         },
         Cmd.none
     )
 
 view : Model -> Html Msg
 view model =
-    div [] [
-        text model.lastLog
-    ]
+    div [] 
+        (List.map (\l -> div [] [text l]) model.log)
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
     case msg of
         NewMessage str ->
-            ({model | lastLog = "Msg: " ++ str }, Cmd.none)
+            ({ model | log = model.log ++ [str] }, Cmd.none)
 
 subscriptions : Model -> Sub Msg
 subscriptions model =

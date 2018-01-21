@@ -25,13 +25,12 @@ type ClientID = usize;
 pub struct WebInterface {
     _iron: iron::Listening,
     _ws_thread: thread::JoinHandle<()>,
-    ws_recv: mpsc::Receiver<WebsocketMessage>,
     ws_send: mpsc::Sender<ClientEvent>
 }
 
 pub struct WebsocketMessage {
-    id: ClientID,
-    msg: String
+    pub id: ClientID,
+    pub msg: String
 }
 
 enum ClientEvent {
@@ -41,14 +40,14 @@ enum ClientEvent {
     Disconnected(ClientID)
 }
 
-pub fn new(http_port: u16, ws_port: u16) -> HttpResult<WebInterface> {
+pub fn new<F,T>(http_port: u16, ws_port: u16, out_msg: mpsc::Sender<T>, map_msg: F) -> HttpResult<WebInterface> 
+        where F: Fn(WebsocketMessage) -> T + Copy + Send + Sync + 'static, T: Send + 'static {
     let mut router = Router::new();
 
     router.get("/", Static::new("static-web"), "index");
     router.get("/*", Static::new("static-web"), "files");
     let iron = Iron::new(router).http(format!("localhost:{}", http_port))?;
 
-    let (ws_recv_tx, ws_recv_rx) = mpsc::channel();
     let (ws_event_tx, ws_event_rx) = mpsc::channel();
 
     let ws_server = websocket::sync::Server::bind(format!("localhost:{}", ws_port))?;
@@ -67,17 +66,17 @@ pub fn new(http_port: u16, ws_port: u16) -> HttpResult<WebInterface> {
                     next_client_id += 1;
 
                     let client_ws_event_tx = listen_ws_event_tx.clone();
-                    let client_ws_recv_tx = ws_recv_tx.clone();
+                    let client_ws_recv_tx = out_msg.clone();
 
                     thread::spawn(move || {
                         client_ws_event_tx.send(ClientEvent::Connected(client_id, writer)).unwrap();
                         for message in reader.incoming_messages() {
                             match message {
                                 Ok(websocket::OwnedMessage::Text(m)) => {
-                                    client_ws_recv_tx.send(WebsocketMessage {
+                                    client_ws_recv_tx.send(map_msg(WebsocketMessage {
                                             id: client_id,
                                             msg: m
-                                        }).unwrap();
+                                        })).unwrap();
                                 },
                                 Ok(websocket::OwnedMessage::Close(_)) => {
                                     client_ws_event_tx.send(ClientEvent::Disconnected(client_id)).unwrap();
@@ -139,7 +138,6 @@ pub fn new(http_port: u16, ws_port: u16) -> HttpResult<WebInterface> {
     Ok(WebInterface {
         _iron: iron,
         _ws_thread: ws_thread,
-        ws_recv: ws_recv_rx,
         ws_send: ws_event_tx
     })
 }
@@ -165,10 +163,6 @@ impl WebInterface {
     pub fn send(&mut self, id: ClientID, msg: proto::Message) -> Result<(), ()> {
         let serialized = serde_json::to_string(&msg).map_err(|_| ())?;
         self.send_json(id, serialized)
-    }
-
-    pub fn get_messages(&mut self) -> &mut mpsc::Receiver<WebsocketMessage> {
-        &mut self.ws_recv
     }
 }
 

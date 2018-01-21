@@ -7,9 +7,40 @@ extern crate chrono;
 mod rfnet;
 
 use std::sync::mpsc;
+use std::sync;
+
+enum Event {
+    Log(String, log::Level, String),
+    WebsocketMessage(rfnet_web::WebsocketMessage)
+}
+
+struct LogMapper {
+    output: sync::Mutex<mpsc::Sender<Event>>
+}
+
+impl log::Log for LogMapper {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        let msg = Event::Log(record.target().to_string(), record.level(), format!("{}", record.args()));
+        self.output.lock().and_then(|v| {
+            v.send(msg).unwrap_or(());
+             Ok(())
+        }).unwrap_or(());
+    }
+
+    fn flush(&self) {
+    }
+}
 
 fn main() {
-    let (log_tx, log_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+
+    let logger: Box<log::Log> = Box::new(LogMapper {
+        output: sync::Mutex::new(event_tx.clone())
+    });
 
     fern::Dispatch::new()
         .filter(|metadata| {
@@ -34,7 +65,7 @@ fn main() {
         })
         .level(log::LevelFilter::Trace)
         .chain(std::io::stdout())
-        .chain(log_tx)
+        .chain(logger)
         .apply()
         .unwrap();
 
@@ -51,11 +82,20 @@ fn main() {
             .default_value("8081"))
         .get_matches();
 
+    fn map_ws(msg: rfnet_web::WebsocketMessage) -> Event {
+        Event::WebsocketMessage(msg)
+    }
+
     let http_port = args.value_of("http_port").unwrap_or("8080").parse::<u16>().unwrap_or(8080);
     let ws_port = args.value_of("ws_port").unwrap_or("8081").parse::<u16>().unwrap_or(8081);
-    let mut http = rfnet_web::new(http_port, ws_port).expect("Failed to start http server");
+    let mut http = rfnet_web::new(http_port, ws_port, event_tx, map_ws).expect("Failed to start http server");
 
-    while let Ok(msg) = log_rx.recv() {
-        http.broadcast(rfnet_web::proto::Message::Log(msg)).unwrap_or(());
+    while let Ok(msg) = event_rx.recv() {
+        match msg {
+            Event::Log(tag, level, msg) => http.broadcast(rfnet_web::proto::Message::Log(msg)).unwrap_or(()),
+            Event::WebsocketMessage(msg) => {
+
+            }
+        }
     }
 }
