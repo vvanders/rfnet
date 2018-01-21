@@ -4,6 +4,12 @@ extern crate staticfile;
 #[macro_use]
 extern crate log;
 extern crate websocket;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+extern crate serde_json;
+
+pub mod proto;
 
 use iron::prelude::*;
 use iron::error::HttpResult;
@@ -73,7 +79,10 @@ pub fn new(http_port: u16, ws_port: u16) -> HttpResult<WebInterface> {
                                             msg: m
                                         }).unwrap();
                                 },
-                                Ok(_) => debug!("Unknown message type on socket {}", client_id),
+                                Ok(websocket::OwnedMessage::Close(_)) => {
+                                    client_ws_event_tx.send(ClientEvent::Disconnected(client_id)).unwrap();
+                                }
+                                Ok(m) => debug!("Unknown message type {:?} on socket {}", m, client_id),
                                 Err(e) => {
                                     debug!("Error on websocket {} {:?}, disconnecting", client_id, e);
                                     client_ws_event_tx.send(ClientEvent::Disconnected(client_id)).unwrap();
@@ -140,12 +149,22 @@ impl WebInterface {
         self._iron.close()
     }
 
-    pub fn broadcast(&mut self, json: &str) -> Result<(), ()> {
-        self.ws_send.send(ClientEvent::Broadcast(json.to_string())).map_err(|_| ())
+    pub fn broadcast_json(&mut self, json: String) -> Result<(), ()> {
+        self.ws_send.send(ClientEvent::Broadcast(json)).map_err(|_| ())
     }
 
-    pub fn send(&mut self, id: ClientID, json: &str) -> Result<(), ()> {
-        self.ws_send.send(ClientEvent::SendMsg(id, json.to_string())).map_err(|_| ())
+    pub fn send_json(&mut self, id: ClientID, json: String) -> Result<(), ()> {
+        self.ws_send.send(ClientEvent::SendMsg(id, json)).map_err(|_| ())
+    }
+
+    pub fn broadcast(&mut self, msg: proto::Message) -> Result<(), ()> {
+        let serialized = serde_json::to_string(&msg).map_err(|_| ())?;
+        self.broadcast_json(serialized)
+    }
+
+    pub fn send(&mut self, id: ClientID, msg: proto::Message) -> Result<(), ()> {
+        let serialized = serde_json::to_string(&msg).map_err(|_| ())?;
+        self.send_json(id, serialized)
     }
 
     pub fn get_messages(&mut self) -> &mut mpsc::Receiver<WebsocketMessage> {

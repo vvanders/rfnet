@@ -4,7 +4,13 @@ extern crate fern;
 extern crate clap;
 extern crate chrono;
 
+mod rfnet;
+
+use std::sync::mpsc;
+
 fn main() {
+    let (log_tx, log_rx) = mpsc::channel();
+
     fern::Dispatch::new()
         .filter(|metadata| {
             let filter = [ "hyper" ];
@@ -28,6 +34,7 @@ fn main() {
         })
         .level(log::LevelFilter::Trace)
         .chain(std::io::stdout())
+        .chain(log_tx)
         .apply()
         .unwrap();
 
@@ -46,5 +53,9 @@ fn main() {
 
     let http_port = args.value_of("http_port").unwrap_or("8080").parse::<u16>().unwrap_or(8080);
     let ws_port = args.value_of("ws_port").unwrap_or("8081").parse::<u16>().unwrap_or(8081);
-    let _http = rfnet_web::new(http_port, ws_port);
+    let mut http = rfnet_web::new(http_port, ws_port).expect("Failed to start http server");
+
+    while let Ok(msg) = log_rx.recv() {
+        http.broadcast(rfnet_web::proto::Message::Log(msg)).unwrap_or(());
+    }
 }

@@ -1,25 +1,47 @@
 import Html exposing (..)
+import WebSocket
 
-type alias Model = ()
+type alias Model = {
+    socketAddr: String,
+    lastLog: String
+}
 
-type Msg  = None
+type Msg  = NewMessage String
 
-main : Program Never () Msg
+main : Program Flags Model Msg
 main = 
-    Html.program {
-        init = ((), Cmd.none),
+    Html.programWithFlags {
+        init = init,
         update = update,
         subscriptions = subscriptions,
         view = view}
 
+type alias Flags = {
+    socket: String
+}
+
+init : Flags -> (Model, Cmd Msg)
+init flags =
+    (
+        {
+            socketAddr = flags.socket,
+            lastLog = ""
+        },
+        Cmd.none
+    )
+
 view : Model -> Html Msg
 view model =
-    div [] []
+    div [] [
+        text model.lastLog
+    ]
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
-    (model, Cmd.none)
+    case msg of
+        NewMessage str ->
+            ({model | lastLog = "Msg: " ++ str }, Cmd.none)
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.none
+    WebSocket.listen model.socketAddr NewMessage
