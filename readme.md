@@ -176,7 +176,7 @@ Parameters:
 #### Ack packet
 Used to acknowledge the receipt of data packets.
 ```
-2b:(SequenceId+PacketType)|2b:(PacketIdx+NackFlag+NoResponseFlag)|1b:CorrectedErrors|10b:FEC
+2b:(SequenceId+PacketType)|1b:(CorrectedErrors+NackFlag+NoResponseFlag)|6b:FEC
 ```
 
 ## RF Net Packet Spec
