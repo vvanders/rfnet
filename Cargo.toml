@@ -6,9 +6,6 @@ authors = ["Val Vanderschaegen <valere.vanderschaegen@gmail.com>"]
 [dependencies]
 rfnet-core = { path = "rfnet-core" }
 rfnet-web = { path = "rfnet-web" }
-rfnet-node = { path = "rfnet-node" }
-rfnet-link = { path = "rfnet-link" }
-rfnet-hub = { path = "rfnet-hub" }
 log = "0.4.1"
 fern = "0.5.2"
 clap = "2.29.2"

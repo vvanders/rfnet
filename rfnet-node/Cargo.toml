@@ -1,6 +1,0 @@
-[package]
-name = "rfnet-node"
-version = "0.1.0"
-authors = ["Val Vanderschaegen <valere.vanderschaegen@gmail.com>"]
-
-[dependencies]

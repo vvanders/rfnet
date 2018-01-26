@@ -8746,48 +8746,131 @@ var _elm_lang$websocket$WebSocket$onSelfMsg = F3(
 	});
 _elm_lang$core$Native_Platform.effectManagers['WebSocket'] = {pkg: 'elm-lang/websocket', init: _elm_lang$websocket$WebSocket$init, onEffects: _elm_lang$websocket$WebSocket$onEffects, onSelfMsg: _elm_lang$websocket$WebSocket$onSelfMsg, tag: 'fx', cmdMap: _elm_lang$websocket$WebSocket$cmdMap, subMap: _elm_lang$websocket$WebSocket$subMap};
 
+var _user$project$Event$Log = function (a) {
+	return {ctor: 'Log', _0: a};
+};
+var _user$project$Event$decodeLog = function () {
+	var map_line = A4(
+		_elm_lang$core$Json_Decode$map3,
+		F3(
+			function (t, l, m) {
+				return A2(
+					_elm_lang$core$Basics_ops['++'],
+					'[',
+					A2(
+						_elm_lang$core$Basics_ops['++'],
+						t,
+						A2(
+							_elm_lang$core$Basics_ops['++'],
+							'] ',
+							A2(
+								_elm_lang$core$Basics_ops['++'],
+								l,
+								A2(_elm_lang$core$Basics_ops['++'], ' ', m)))));
+			}),
+		A2(_elm_lang$core$Json_Decode$field, 'tag', _elm_lang$core$Json_Decode$string),
+		A2(_elm_lang$core$Json_Decode$field, 'level', _elm_lang$core$Json_Decode$string),
+		A2(_elm_lang$core$Json_Decode$field, 'msg', _elm_lang$core$Json_Decode$string));
+	return A2(
+		_elm_lang$core$Json_Decode$map,
+		_user$project$Event$Log,
+		A2(_elm_lang$core$Json_Decode$field, 'Log', map_line));
+}();
+var _user$project$Event$DecodeError = function (a) {
+	return {ctor: 'DecodeError', _0: a};
+};
+var _user$project$Event$decode = function (str) {
+	var result = A2(
+		_elm_lang$core$Json_Decode$decodeString,
+		_elm_lang$core$Json_Decode$oneOf(
+			{
+				ctor: '::',
+				_0: _user$project$Event$decodeLog,
+				_1: {ctor: '[]'}
+			}),
+		str);
+	var _p0 = result;
+	if (_p0.ctor === 'Ok') {
+		return _p0._0;
+	} else {
+		return _user$project$Event$DecodeError(_p0._0);
+	}
+};
+
+var _user$project$Main$subscriptions = function (model) {
+	return A2(
+		_elm_lang$websocket$WebSocket$listen,
+		model.socketAddr,
+		function (str) {
+			return _user$project$Event$decode(str);
+		});
+};
 var _user$project$Main$update = F2(
 	function (msg, model) {
 		var _p0 = msg;
-		return {
-			ctor: '_Tuple2',
-			_0: _elm_lang$core$Native_Utils.update(
-				model,
-				{
-					lastLog: A2(_elm_lang$core$Basics_ops['++'], 'Msg: ', _p0._0)
-				}),
-			_1: _elm_lang$core$Platform_Cmd$none
-		};
+		if (_p0.ctor === 'Log') {
+			return {
+				ctor: '_Tuple2',
+				_0: _elm_lang$core$Native_Utils.update(
+					model,
+					{
+						log: A2(
+							_elm_lang$core$Basics_ops['++'],
+							model.log,
+							{
+								ctor: '::',
+								_0: _p0._0,
+								_1: {ctor: '[]'}
+							})
+					}),
+				_1: _elm_lang$core$Platform_Cmd$none
+			};
+		} else {
+			return {
+				ctor: '_Tuple2',
+				_0: _elm_lang$core$Native_Utils.update(
+					model,
+					{
+						log: A2(
+							_elm_lang$core$Basics_ops['++'],
+							model.log,
+							{
+								ctor: '::',
+								_0: A2(_elm_lang$core$Basics_ops['++'], 'Decode Error: ', _p0._0),
+								_1: {ctor: '[]'}
+							})
+					}),
+				_1: _elm_lang$core$Platform_Cmd$none
+			};
+		}
 	});
 var _user$project$Main$view = function (model) {
 	return A2(
 		_elm_lang$html$Html$div,
 		{ctor: '[]'},
-		{
-			ctor: '::',
-			_0: _elm_lang$html$Html$text(model.lastLog),
-			_1: {ctor: '[]'}
-		});
+		A2(
+			_elm_lang$core$List$map,
+			function (l) {
+				return A2(
+					_elm_lang$html$Html$div,
+					{ctor: '[]'},
+					{
+						ctor: '::',
+						_0: _elm_lang$html$Html$text(l),
+						_1: {ctor: '[]'}
+					});
+			},
+			model.log));
 };
 var _user$project$Main$init = function (flags) {
 	return {
 		ctor: '_Tuple2',
-		_0: {socketAddr: flags.socket, lastLog: ''},
+		_0: {
+			socketAddr: flags.socket,
+			log: {ctor: '[]'}
+		},
 		_1: _elm_lang$core$Platform_Cmd$none
 	};
-};
-var _user$project$Main$Model = F2(
-	function (a, b) {
-		return {socketAddr: a, lastLog: b};
-	});
-var _user$project$Main$Flags = function (a) {
-	return {socket: a};
-};
-var _user$project$Main$NewMessage = function (a) {
-	return {ctor: 'NewMessage', _0: a};
-};
-var _user$project$Main$subscriptions = function (model) {
-	return A2(_elm_lang$websocket$WebSocket$listen, model.socketAddr, _user$project$Main$NewMessage);
 };
 var _user$project$Main$main = _elm_lang$html$Html$programWithFlags(
 	{init: _user$project$Main$init, update: _user$project$Main$update, subscriptions: _user$project$Main$subscriptions, view: _user$project$Main$view})(
@@ -8798,6 +8881,13 @@ var _user$project$Main$main = _elm_lang$html$Html$programWithFlags(
 				{socket: socket});
 		},
 		A2(_elm_lang$core$Json_Decode$field, 'socket', _elm_lang$core$Json_Decode$string)));
+var _user$project$Main$Model = F2(
+	function (a, b) {
+		return {socketAddr: a, log: b};
+	});
+var _user$project$Main$Flags = function (a) {
+	return {socket: a};
+};
 
 var Elm = {};
 Elm['Main'] = Elm['Main'] || {};

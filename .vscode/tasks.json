@@ -29,12 +29,6 @@
                 "-p",
                 "rfnet-core",
                 "-p",
-                "rfnet-node",
-                "-p",
-                "rfnet-link",
-                "-p",
-                "rfnet-hub",
-                "-p",
                 "rfnet-web"
             ],
             "problemMatcher": [

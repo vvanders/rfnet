@@ -1,4 +1,5 @@
 extern crate rfnet_web;
+extern crate rfnet_core;
 extern crate log;
 extern crate fern;
 extern crate clap;
@@ -19,7 +20,7 @@ struct LogMapper {
 }
 
 impl log::Log for LogMapper {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
         true
     }
 
@@ -54,12 +55,10 @@ fn main() {
 
             true
         })
-        .format(|out, message, record| {
+        .format(|out, message, _record| {
             out.finish(format_args!(
-                "{}[{}][{}] {}",
+                "{} {}",
                 chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
-                record.target(),
-                record.level(),
                 message
             ))
         })
@@ -92,7 +91,17 @@ fn main() {
 
     while let Ok(msg) = event_rx.recv() {
         match msg {
-            Event::Log(tag, level, msg) => http.broadcast(rfnet_web::proto::Message::Log(msg)).unwrap_or(()),
+            Event::Log(tag, level, msg) => {
+                use rfnet_web::proto::*;
+
+                let msg = LogLine {
+                    tag,
+                    level: LogLevel::from_log(level),
+                    msg
+                };
+
+                http.broadcast(Message::Log(msg)).unwrap_or(());
+            },
             Event::WebsocketMessage(msg) => {
 
             }
