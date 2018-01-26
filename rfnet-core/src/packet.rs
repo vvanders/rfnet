@@ -502,5 +502,48 @@ mod test {
             verify_packet(packet, 3);
         }
 
+        for i in 0..64 {
+            let packet = Packet::Ack(AckPacket {
+                packet_id: 16000,
+                nack: true,
+                no_response: true,
+                corrected_errors: i
+            });
+
+            verify_packet(packet, 3);
+        }
+
+        {
+            let packet = Packet::Ack(AckPacket {
+                packet_id: 16000,
+                nack: false,
+                no_response: false,
+                corrected_errors: 3
+            });
+
+            verify_packet(packet, 3);
+        }
+
+        {
+            let packet = Packet::Ack(AckPacket {
+                packet_id: 16000,
+                nack: true,
+                no_response: false,
+                corrected_errors: 3
+            });
+
+            verify_packet(packet, 3);
+        }
+
+        {
+            let packet = Packet::Ack(AckPacket {
+                packet_id: 16000,
+                nack: false,
+                no_response: true,
+                corrected_errors: 3
+            });
+
+            verify_packet(packet, 3);
+        }
     }
 }
