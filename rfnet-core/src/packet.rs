@@ -444,23 +444,48 @@ fn decode_ctrl<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
 mod test {
     use super::*;
 
-    fn verify_packet(packet: Packet) {
-        verify_packet_internal(packet.clone(), true);
-        verify_packet_internal(packet.clone(), false);
+    fn verify_packet(packet: Packet, max_err: usize) {
+        verify_packet_internal(packet.clone(), true, max_err);
+        verify_packet_internal(packet.clone(), false, max_err);
     }
 
-    fn verify_packet_internal(packet: Packet, fec: bool) {
+    fn verify_packet_internal(packet: Packet, fec: bool, mut max_err: usize) {
         let mut scratch = vec!();
 
         let written = encode(&packet.clone(), fec, &mut scratch).unwrap();
         assert_eq!(written, scratch.len());
 
-        match decode(&mut scratch[..], fec) {
-             Ok((p,errs)) => {
-                 assert_eq!(p, packet);
-                 assert_eq!(errs, 0);
-             },
-             Err(e) => panic!("{:?}", e)
+        //FEC tests takes considerable time so only test in release
+        if cfg!(debug_assertions) {
+            max_err = 0;
+        }
+
+        if fec {
+            for e in 0..max_err {
+                let stride = scratch.len() - e;
+
+                for i in 0..stride {
+                    let mut corrupt = scratch.clone();
+
+                    for j in 0..e {
+                        corrupt[j+i] = !corrupt[j+i];
+                    }
+
+                    verify_decode(corrupt, packet.clone(), fec, e);
+                }
+            }
+        } else {
+            verify_decode(scratch, packet, fec, 0);
+        }
+    }
+
+    fn verify_decode(mut data: Vec<u8>, packet: Packet, fec: bool, errs: usize) {
+        match decode(&mut data[..], fec) {
+            Ok((p,e)) => {
+                assert_eq!(p, packet);
+                assert_eq!(e, errs);
+            },
+            Err(e) => panic!("{:?}", e)
         };
     }
 
@@ -474,7 +499,7 @@ mod test {
                 corrected_errors: 3
             });
 
-            verify_packet(packet);
+            verify_packet(packet, 3);
         }
 
     }
