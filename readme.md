@@ -158,19 +158,17 @@ Control packets are used to negotiate channel status, flow control and deliver o
 Data packets do the heavy lifting of the RF NET protocol. They are responsible for sequencing and the delivery of data. The size of data packets can be configured on a per-Link basis to best match the throughput of the specific radio parameters.
 
 ```
-2b:(PacketIdx or SequenceId if StartFlag is set+PacketType)|1b:BLOCK_SIZE+FEC_BYTES+START_FLAG+END_FLAG|(1b+2b)*2:HeaderFEC|LINK_WIDTH-(FEC_BYTES+3b+6b):payload|FEC_BYTES:FEC
+2b:(PacketIdx or SequenceId if StartFlag is set+PacketType)|1b:FEC_BYTES+START_FLAG+END_FLAG|(1b+2b)*2:HeaderFEC|LINK_WIDTH-(FEC_BYTES+3b+6b):payload|FEC_BYTES:FEC
 ```
 
 ```
 Parameters:
     LINK_WIDTH: nominally 256 bytes but can be changed to adjust to native framing size
     FEC_BYTES: 2,4,6,8,16,32,64 number of bytes of FEC
-    BLOCK_SIZE: 0,1,2,4,7,15,31,63 ratio of FEC bytes to data bytes. 0 means single block per packet
 
     START_FLAG:1
     END_FLAT:1
-    BLOCK_SIZE:3(8)
-    FEC_BYTES:3(8)
+    FEC_BYTES:6(64)
 ```
 
 #### Ack packet
