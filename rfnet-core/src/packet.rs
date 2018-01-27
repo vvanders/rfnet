@@ -88,7 +88,12 @@ pub fn decode<'a>(data: &'a mut [u8], fec_enabled: bool) -> Result<(Packet<'a>, 
     }
 }
 
-pub fn decode_data_blocks<T>(header: &DataPacket, data: &[u8], out: &mut T) -> Result<usize, DataDecodeError> where T: Write {
+pub fn decode_data_blocks<T>(header: &DataPacket, data: &[u8], fec: bool, out: &mut T) -> Result<usize, DataDecodeError> where T: Write {
+    if !fec {
+        out.write(data).map_err(|e| DataDecodeError::Io(e))?;
+        return Ok(0)
+    }
+
     let mut acc_err = 0;
 
     let decoder = reed_solomon::Decoder::new(get_fec_bytes(header.fec_bytes));
@@ -131,7 +136,7 @@ const NEGATIVE_ACK_MASK: u8 = 0b0100_0000;
 const CORRECTED_ERR_MASK: u8 = 0b0011_1111;
 
 //Ctrl
-const CONTROL_TYPE_MASK: u8 = 0b0011_0000;
+const CONTROL_TYPE_MASK: u8 = 0b0000_0111;
 
 fn get_fec_bytes(fec_count: u8) -> usize {
     (fec_count+1) as usize * 2
@@ -177,7 +182,7 @@ fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Packet
 
 fn encode_non_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, PacketEncodeError> where T: Write {
     match packet {
-        &Packet::Data(ref header, ref payload) => {
+        &Packet::Data(ref _header, ref payload) => {
             let len = encode_inner(packet, writer)?;
             writer.write(payload)?;
 
@@ -233,10 +238,9 @@ fn encode_inner<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Pack
                 ControlType::LinkClose => 3,
                 ControlType::LinkClear => 4,
                 ControlType::NodeWaiting => 5,
-                ControlType::Notification => 6,
-                _ => return Err(PacketEncodeError::BadFormat)
+                ControlType::Notification => 6
             };
-            let mut packet_type = CTRL_MASK & ctrl_type;
+            let mut packet_type = CTRL_MASK | (CONTROL_TYPE_MASK & ctrl_type);
 
             writer.write_u8(packet_type)?;
             writer.write_u16::<BigEndian>(header.session_id)?;
@@ -312,7 +316,7 @@ fn decode_fec<'a>(data: &'a mut [u8]) -> Result<(Packet<'a>, usize), PacketDecod
     let decoded = decoder.correct_err_count(&data[..9], None).map_err(|_| PacketDecodeError::TooManyFECErrors);
 
     if let Ok((header, errs)) = decoded {
-        return decode_data(&*header, &data[9..]).map(|p| (p,errs))
+        return decode_data(&header[..3], &data[9..]).map(|p| (p,errs))
     } else {
         Err(PacketDecodeError::TooManyFECErrors)
     }
@@ -339,7 +343,7 @@ fn decode_broadcast<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError>
     let major_ver = data[1];
     let minor_ver = data[2];
 
-    let link_width = Cursor::new(&data[3..4]).read_u16::<BigEndian>().map_err(|_| PacketDecodeError::BadFormat)?;
+    let link_width = Cursor::new(&data[3..5]).read_u16::<BigEndian>().map_err(|_| PacketDecodeError::BadFormat)?;
 
     let callsign = &data[5..];
 
@@ -408,7 +412,7 @@ fn decode_ctrl<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
         return Err(PacketDecodeError::BadFormat)
     }
 
-    let ctrl_type = match (data[0] & CONTROL_TYPE_MASK) >> 4 {
+    let ctrl_type = match data[0] & CONTROL_TYPE_MASK {
         0 => ControlType::Reserved,
         1 => ControlType::LinkRequest,
         2 => ControlType::LinkOpened,
@@ -419,7 +423,7 @@ fn decode_ctrl<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
         _ => return Err(PacketDecodeError::BadFormat)
     };
 
-    let session_id = Cursor::new(&data[1..2]).read_u16::<BigEndian>().map_err(|_| PacketDecodeError::BadFormat)?;
+    let session_id = Cursor::new(&data[1..3]).read_u16::<BigEndian>().map_err(|_| PacketDecodeError::BadFormat)?;
     
     let callsign_block = &data[3..];
 
@@ -431,6 +435,8 @@ fn decode_ctrl<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
     } else {
         return Err(PacketDecodeError::BadFormat)
     };
+
+    let dest_callsign = &dest_callsign[1..];
 
     Ok(Packet::Control(ControlPacket {
         ctrl_type,
@@ -545,5 +551,195 @@ mod test {
 
             verify_packet(packet, 3);
         }
+    }
+
+    #[test]
+    fn test_ctrl() {
+        let control_types = [
+                ControlType::LinkRequest,
+                ControlType::LinkOpened,
+                ControlType::LinkClose,
+                ControlType::LinkClear,
+                ControlType::NodeWaiting,
+                ControlType::Notification
+            ];
+
+        let scratch_callsign = "ki7est";
+
+        for ctype in control_types.iter().cloned() {
+            verify_packet(Packet::Control(ControlPacket {
+                ctrl_type: ctype,
+                session_id: 1000,
+                source_callsign: scratch_callsign.as_bytes(),
+                dest_callsign: scratch_callsign.as_bytes()
+            }), 3 + scratch_callsign.as_bytes().len() * 2)
+        }
+
+        for i in 1..10 {
+            for j in 1..10 {
+                let source_callsign = (1..(i+1)).collect::<Vec<u8>>();
+                let dest_callsign = (1..(j+1)).collect::<Vec<u8>>();
+
+                verify_packet(Packet::Control(ControlPacket {
+                    ctrl_type: ControlType::LinkRequest,
+                    session_id: 1000,
+                    source_callsign: &source_callsign[..],
+                    dest_callsign: &dest_callsign[..]
+                }), (3 + i + j) as usize);
+            }
+        }
+
+        for i in 0..16384 {
+            verify_packet(Packet::Control(ControlPacket {
+                ctrl_type: ControlType::LinkRequest,
+                session_id: i,
+                source_callsign: &[1],
+                dest_callsign: &[1]
+            }), 3 + 2)
+        }
+    }
+
+    #[test]
+    fn test_broadcast() {
+        let scratch_callsign = "ki7est";
+
+        let base_packet = BroadcastPacket {
+            fec_enabled: false,
+            retry_enabled: false,
+            major_ver: 0,
+            minor_ver: 0,
+            link_width: 0,
+            callsign: &scratch_callsign.as_bytes()
+        };
+
+        {
+            let packet = base_packet.clone();
+            verify_packet(Packet::Broadcast(packet), 5 + scratch_callsign.len());
+        }
+
+        {
+            let mut packet = base_packet.clone();
+            packet.fec_enabled = true;
+            verify_packet(Packet::Broadcast(packet), 5 + scratch_callsign.len());
+        }
+
+        {
+            let mut packet = base_packet.clone();
+            packet.retry_enabled = true;
+            verify_packet(Packet::Broadcast(packet), 5 + scratch_callsign.len());
+        }
+
+        for i in 0..255 {
+            let mut packet = base_packet.clone();
+            packet.major_ver = i;
+            verify_packet(Packet::Broadcast(packet), 5 + scratch_callsign.len());
+        }
+
+        for i in 0..255 {
+            let mut packet = base_packet.clone();
+            packet.minor_ver = i;
+            verify_packet(Packet::Broadcast(packet), 5 + scratch_callsign.len());
+        }
+
+        for i in 0..16384 {
+            let mut packet = base_packet.clone();
+            packet.link_width = i;
+            verify_packet(Packet::Broadcast(packet), 5 + scratch_callsign.len());
+        }
+    }
+
+    #[test]
+    fn test_data() {
+        //Only tests data header, payload test in data_payload
+        let base_packet = DataPacket {
+            packet_idx: 0,
+            fec_bytes: 0,
+            start_flag: false,
+            end_flag: false
+        };
+
+        for i in 0..16384 {
+            let mut packet = base_packet.clone();
+            packet.packet_idx = i;
+            verify_packet(Packet::Data(packet, &[]), 3);
+        }
+
+        for i in 0..64 {
+            let mut packet = base_packet.clone();
+            packet.fec_bytes = i;
+            verify_packet(Packet::Data(packet, &[]), 3);
+        }
+
+        {
+            let mut packet = base_packet.clone();
+            packet.start_flag = true;
+            verify_packet(Packet::Data(packet, &[]), 3);
+        }
+
+        {
+            let mut packet = base_packet.clone();
+            packet.end_flag = true;
+            verify_packet(Packet::Data(packet, &[]), 3);
+        }
+    }
+
+    #[test]
+    fn test_data_payload() {
+        let base_packet = DataPacket {
+            packet_idx: 0,
+            fec_bytes: 0,
+            start_flag: false,
+            end_flag: false
+        };
+
+        test_data_payload_size(base_packet, 32);
+    }
+
+    fn test_data_payload_size(packet: DataPacket, size: usize) {
+        let data = (0..size).map(|v| (v & 0xFF) as u8).collect::<Vec<u8>>();
+
+        verify_data_packet(&packet, &data[..], true);
+        verify_data_packet(&packet, &data[..], false);
+    }
+
+    fn verify_data_packet(packet: &DataPacket, data: &[u8], fec: bool) {
+        let mut scratch = vec!();
+
+        let written = encode(&Packet::Data(packet.clone(), data), fec, &mut scratch).unwrap();
+        assert_eq!(written, scratch.len());
+
+        //FEC tests takes considerable time so only test in release
+        let mut max_err = get_fec_bytes(packet.fec_bytes) / 2;
+        if cfg!(debug_assertions) {
+            max_err = 0;
+        } else {
+            panic!();
+        }
+
+        if fec {
+            verify_data_packet_decode(&mut scratch[..], data, fec, max_err)
+        } else {
+            verify_data_packet_decode(&mut scratch[..], data, fec, 0)
+        }
+    }
+
+    fn verify_data_packet_decode(encoded: &mut [u8], data: &[u8], fec: bool, fec_errors: usize) {
+        let (header, payload) = match decode(encoded, fec) {
+            Ok((Packet::Data(header, payload), errs)) => {
+                assert_eq!(errs, fec_errors);
+                (header, payload)
+            },
+            o => panic!("{:?}", o)
+        };
+
+        verify_data_blocks(&header, payload, data, fec, fec_errors);
+    }
+
+    fn verify_data_blocks(packet: &DataPacket, payload: &[u8], data: &[u8], fec:bool, err: usize) {
+        let mut decoded = vec!();
+        let fec_err = decode_data_blocks(packet, payload, fec, &mut decoded).unwrap();
+
+        assert_eq!(fec_err, err);
+        assert_eq!(&decoded[..], data);
     }
 }
