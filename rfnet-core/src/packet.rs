@@ -97,7 +97,7 @@ pub fn decode_data_blocks<T>(header: &DataPacket, data: &[u8], fec: bool, out: &
     let mut acc_err = 0;
 
     let decoder = reed_solomon::Decoder::new(get_fec_bytes(header.fec_bytes));
-    for block in data.chunks(256) {
+    for block in data.chunks(BLOCK_SIZE) {
         let (decoded, err) = decoder.correct_err_count(block, None).map_err(|_| DataDecodeError::TooManyFECErrors)?;
         out.write(decoded.data()).map_err(|e| DataDecodeError::Io(e))?;
 
@@ -129,6 +129,7 @@ const RETRY_ENABLED_MASK: u8 = 0b0001_0000;
 const START_FLAG_MASK: u8 = 0b1000_0000;
 const END_FLAG_MASK: u8 = 0b0100_0000;
 const FEC_BYTES_MASK: u8 = 0b0011_1111;
+const BLOCK_SIZE: usize = 255;
 
 //Ack
 const NO_RESPONSE_MASK: u8 = 0b1000_0000;
@@ -137,6 +138,9 @@ const CORRECTED_ERR_MASK: u8 = 0b0011_1111;
 
 //Ctrl
 const CONTROL_TYPE_MASK: u8 = 0b0000_0111;
+
+//Shared
+const FEC_CRC_BYTES: usize = 6;
 
 fn get_fec_bytes(fec_count: u8) -> usize {
     (fec_count+1) as usize * 2
@@ -150,18 +154,22 @@ fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Packet
                 let mut cursor = Cursor::new(&mut scratch_header[..]);
                 encode_inner(packet, &mut cursor)?;
             }
-            
-            let encoder = reed_solomon::Encoder::new(6);
-            let encoded = encoder.encode(&scratch_header[..]);
 
-            writer.write(&**encoded)?;
+            writer.write(&scratch_header)?;
 
             let plen = encode_blocks(content, header.fec_bytes, writer)?;
 
-            Ok(encoded.len() + plen)
+            //Append our header FEC to the end of the packet so we can match what
+            //we do for non-data packets.
+            let encoder = reed_solomon::Encoder::new(FEC_CRC_BYTES);
+            let encoded = encoder.encode(&scratch_header[..]);
+
+            writer.write(encoded.ecc())?;
+
+            Ok(3 + plen + FEC_CRC_BYTES)
         },
         _ => {
-            //Max size of an inner frame at 2x FEC with 256b frame
+            //Max size of an inner frame at 2x FEC with 255b frame
             let mut scratch: [u8; 85] = unsafe { ::std::mem::uninitialized() };
             let len = {
                 let mut cursor = Cursor::new(&mut scratch[..]);
@@ -175,7 +183,17 @@ fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Packet
 
             writer.write(&**encoded)?;
 
-            Ok(encoded.len())
+            //Since we have disparate sizes for our FEC types(data vs other)
+            //we need to emulate the same way we treat the first 3 bytes in data packets so
+            //we can cleanly differentiate between our types. Otherwise stray
+            //bytes in callsign/etc can trigger false positives and "correct"
+            //a packet incorrectly.
+            let crc_encoder = reed_solomon::Encoder::new(FEC_CRC_BYTES);
+            let crc_encoded = crc_encoder.encode(&scratch[..3]);
+
+            writer.write(crc_encoded.ecc())?;
+
+            Ok(encoded.len() + crc_encoded.ecc().len())
         }
     }
 }
@@ -276,7 +294,7 @@ fn encode_blocks<T>(data: &[u8], fec_bytes: u8, writer: &mut T) -> Result<usize,
     let encoder = reed_solomon::Encoder::new(fec_bytes);
     let mut encoded_size = 0;
 
-    for block in data.chunks(256-fec_bytes) {
+    for block in data.chunks(BLOCK_SIZE-fec_bytes) {
         let encoded = encoder.encode(block);
         writer.write(&**encoded)?;
 
@@ -287,39 +305,49 @@ fn encode_blocks<T>(data: &[u8], fec_bytes: u8, writer: &mut T) -> Result<usize,
 }
 
 fn decode_fec<'a>(data: &'a mut [u8]) -> Result<(Packet<'a>, usize), PacketDecodeError> {
-    //Possibly non-data packet, try that first
-    if data.len() % 3 == 0 {
-        let data_len = data.len() / 3;
-
-        let decoder = reed_solomon::Decoder::new(data.len() - data_len);
-        let decoded = decoder.correct_err_count(data, None).map_err(|_| PacketDecodeError::TooManyFECErrors);
-
-        //We have non-data packet
-        if let Ok((fixed, errs)) = decoded {
-            if errs > 0 {
-                data.copy_from_slice(&**fixed);
-            }
-
-            return decode_corrected(&data[..data_len]).map(|p| (p,errs))
-        }
-
-        trace!("Couldn't decoded non-data packet, trying as data");
-    }
-
     if data.len() < 9 {
         trace!("Failed to decode packet, missing data header");
         return Err(PacketDecodeError::BadFormat)
     }
 
-    //Header is 1 + 2 bytes
-    let decoder = reed_solomon::Decoder::new(6);
-    let decoded = decoder.correct_err_count(&data[..9], None).map_err(|_| PacketDecodeError::TooManyFECErrors);
+    //See what type of packet we have
+    //Header is 1 + 2 bytes split between start and end of the packet
+    let fec_start = data.len() - FEC_CRC_BYTES;
+    let mut header: [u8; 9] = unsafe { ::std::mem::uninitialized() };
+    header[..3].copy_from_slice(&data[..3]);
+    header[3..].copy_from_slice(&data[fec_start..]);
 
-    if let Ok((header, errs)) = decoded {
-        return decode_data(&header[..3], &data[9..]).map(|p| (p,errs))
+    let header_decoder = reed_solomon::Decoder::new(6);
+    let header_decoded = header_decoder.correct_err_count(&header, None).map_err(|_| PacketDecodeError::TooManyFECErrors);
+
+    if let Ok((header, errs)) = header_decoded {
+        if header[0] & PACKET_TYPE_MASK == DATA_MASK {
+            let data_end = data.len() - FEC_CRC_BYTES;
+            return decode_data(&header[..3], &data[3..data_end]).map(|p| (p,errs))
+        }
     } else {
-        Err(PacketDecodeError::TooManyFECErrors)
+        trace!("Failed to decoded header, try as non-data packet");
     }
+
+    //Possibly non-data packet
+    let potential_data_bytes = data.len() - FEC_CRC_BYTES;
+    if potential_data_bytes % 3 == 0 {
+        let data_len = potential_data_bytes / 3;
+
+        let decoder = reed_solomon::Decoder::new(potential_data_bytes - data_len);
+        let decoded = decoder.correct_err_count(&data[..potential_data_bytes], None).map_err(|_| PacketDecodeError::TooManyFECErrors);
+
+        //We have non-data packet
+        if let Ok((fixed, errs)) = decoded {
+            if errs > 0 {
+                data[..potential_data_bytes].copy_from_slice(&**fixed);
+            }
+
+            return decode_corrected(&data[..data_len]).map(|p| (p,errs))
+        }
+    }
+
+    Err(PacketDecodeError::TooManyFECErrors)
 }
 
 fn decode_corrected<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
@@ -466,9 +494,18 @@ mod test {
             max_err = 0;
         }
 
+        let is_data = if let &Packet::Data(_,_) = &packet {
+            true
+        } else {
+            false
+        };
+
         if fec {
             for e in 0..max_err {
-                let stride = scratch.len() - e;
+                let mut stride = scratch.len() - e;
+                if !is_data {
+                    stride = stride - FEC_CRC_BYTES;
+                }
 
                 for i in 0..stride {
                     let mut corrupt = scratch.clone();
@@ -692,7 +729,13 @@ mod test {
             end_flag: false
         };
 
-        test_data_payload_size(base_packet, 32);
+        for i in 0..20 {
+            for f in 0..64 {
+                let mut packet = base_packet.clone();
+                packet.fec_bytes = f;
+                test_data_payload_size(packet, i*100);
+            }
+        }
     }
 
     fn test_data_payload_size(packet: DataPacket, size: usize) {
@@ -712,12 +755,26 @@ mod test {
         let mut max_err = get_fec_bytes(packet.fec_bytes) / 2;
         if cfg!(debug_assertions) {
             max_err = 0;
-        } else {
-            panic!();
         }
 
-        if fec {
-            verify_data_packet_decode(&mut scratch[..], data, fec, max_err)
+        if fec && scratch.len() > 9 {
+            for e in 0..max_err {
+                let mut stride = scratch.len() - e - FEC_CRC_BYTES - 3;
+
+                for i in 3..stride {
+                    if i-3 % 100 != 0 {
+                        continue
+                    }
+
+                    let mut corrupt = scratch.clone();
+
+                    for j in 0..e {
+                        corrupt[j+i+3] = !corrupt[j+i+3];
+                    }
+
+                    verify_data_packet_decode(&mut corrupt[..], data, fec, e)
+                }
+            }
         } else {
             verify_data_packet_decode(&mut scratch[..], data, fec, 0)
         }
@@ -726,7 +783,7 @@ mod test {
     fn verify_data_packet_decode(encoded: &mut [u8], data: &[u8], fec: bool, fec_errors: usize) {
         let (header, payload) = match decode(encoded, fec) {
             Ok((Packet::Data(header, payload), errs)) => {
-                assert_eq!(errs, fec_errors);
+                assert_eq!(errs,0);
                 (header, payload)
             },
             o => panic!("{:?}", o)
