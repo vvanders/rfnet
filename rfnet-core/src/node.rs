@@ -1,4 +1,5 @@
 use packet::*;
+use acked_packet::{AckedPacket, AckResult};
 
 use std::io;
 
@@ -6,14 +7,27 @@ use std::io;
 pub enum State {
     Listening(usize),
     Idle,
-    Negotiating(usize),
+    Negotiating(AckedPacket),
     Established
 }
 
-pub struct Node<W> where W: io::Write {
-    writer: W,
+pub enum RecvResult {
+    BadPacket,
+    Noop,
+    Ack(usize,usize),
+    Complete(u16, bool),
+    Response(u16)
+}
+
+pub struct Node<'a,W,R,T> where W: io::Write, W:'a, R: io::Write, R: 'a, T: io::Read {
+    callsign: String,
+    packet_writer: &'a mut W,
+    response_writer: &'a mut R,
+    last_packet: Vec<u8>,
     state: State,
-    link_info: Option<LinkInformation>
+    link_info: Option<LinkInformation>,
+    pending_requests: Vec<(u16,T)>,
+    next_request_id: u16
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,14 +40,21 @@ struct LinkInformation {
     minor_ver: u8
 }
 
-const LISTEN_TIMEOUT: usize = 10 * 1000;
 
-impl<W> Node<W> where W: io::Write {
-    pub fn new(writer: W) -> Node<W> {
+const LISTEN_TIMEOUT: usize = 10 * 1000;
+const NEGOTIATE_RETRY: usize = 500;
+
+impl<'a,W,R,T> Node<'a,W,R,T> where W: io::Write, W: 'a, R: io::Write, R: 'a, T: io::Read {
+    pub fn new(callsign: String, packet_writer: &'a mut W, response_writer: &'a mut R) -> Node<'a,W,R,T> {
         Node {
-            writer,
+            callsign,
+            packet_writer,
+            response_writer,
+            last_packet: vec!(),
             state: State::Listening(0),
-            link_info: None
+            link_info: None,
+            pending_requests: vec!(),
+            next_request_id: 0
         }
     }
 
@@ -41,8 +62,58 @@ impl<W> Node<W> where W: io::Write {
         &self.link_info
     }
 
+    pub fn send_request(&mut self, request_reader: T) -> Result<u16, PacketEncodeError> {
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id + 1;
+
+        self.pending_requests.push((request_id, request_reader));
+
+        //If we're idle kick over to connecting
+        self.connect().map(|_| request_id)
+    }
+
+    fn connect(&mut self) -> Result<(), PacketEncodeError> {
+        if let State::Idle = self.state {
+            self.state = State::Negotiating(AckedPacket::new(NEGOTIATE_RETRY));
+            self.last_packet.clear();
+
+            let fec = self.is_fec_enabled();
+            //Destructure this here so we can borrow different fields as mut/non-mut
+            let &mut Node {ref link_info, ref mut packet_writer, .. } = self;
+
+            let dest = if let &Some(ref link_info) = link_info {
+                link_info.callsign.as_bytes()
+            } else {
+                &"".as_bytes()
+            };
+
+            let packet = Packet::Control(ControlPacket {
+                ctrl_type: ControlType::LinkRequest,
+                session_id: 0,
+                source_callsign: self.callsign.as_bytes(),
+                dest_callsign: dest
+            });
+
+            encode(&packet, fec, packet_writer).map(|_| ())
+        } else {
+            Ok(())
+        }
+    }
+
     fn is_fec_enabled(&self) -> bool {
         self.link_info.as_ref().map(|v| v.fec_enabled).unwrap_or(true)
+    }
+
+    fn get_link_width(&self) -> u16 {
+        self.link_info.as_ref().map(|v| v.link_width).unwrap_or(256)
+    }
+
+    fn get_dest_callsign(&self) -> &str {
+        if let Some(ref link_info) = self.link_info {
+            &link_info.callsign.as_str()
+        } else {
+            &""
+        }
     }
 
     fn decode_broadcast(&mut self, data: &mut [u8]) -> Result<Option<LinkInformation>, PacketDecodeError> {
@@ -78,8 +149,10 @@ impl<W> Node<W> where W: io::Write {
         }
     }
 
-    pub fn recv_data(&mut self, data: &mut [u8]) -> Result<Option<usize>, PacketDecodeError> {
-        let (new_state, next_tick) = match self.state {
+    pub fn recv_data(&mut self, data: &mut [u8]) -> Result<RecvResult, PacketDecodeError> {
+        let fec = self.is_fec_enabled();
+
+        let new_state = match self.state {
             State::Listening(_) | State::Idle => {
                 let broadcast = self.decode_broadcast(data);
 
@@ -87,39 +160,82 @@ impl<W> Node<W> where W: io::Write {
                     //Broadcast packets don't count towards listening/idle
                     self.link_info = Some(link_info);
 
-                    (self.state.clone(), None)
+                    None
                 } else {
                     //Any packet while listening or idle resets out listen timer
-                    (State::Listening(0), Some(LISTEN_TIMEOUT))
+                    Some((State::Listening(0), RecvResult::Noop))
                 }
             },
-            State::Negotiating(_) => {
-                (self.state.clone(), None)
+            State::Negotiating(ref mut ack_state) => {
+                let callsign = self.callsign.as_bytes();
+                let ack = match decode(data, fec)? {
+                    (Packet::Control(ref header),_) if header.dest_callsign == callsign => {
+                        match header.ctrl_type {
+                            ControlType::LinkOpened => Some(header.session_id),
+                            _ => None
+                        }
+                    },
+                    _ => None
+                };
+
+                if let Some(session_id) = ack {
+                    Some((State::Established, RecvResult::Ack(1,1)))
+                } else {
+                    None
+                }
             },
-            State::Established => (self.state.clone(), None)
+            State::Established => None
         };
 
-        self.state = new_state;
-
-        Ok(next_tick)
+        if let Some((new_state, result)) = new_state {
+            self.state = new_state;
+            Ok(result)
+        } else {
+            Ok(RecvResult::Noop)
+        }
     }
 
-    pub fn elapsed(&mut self, ms: usize) -> Result<Option<usize>, io::Error> {
-        let (new_state, next_tick) = match self.state {
+    fn is_suspend_packet(packet: &Packet) -> bool {
+        if let &Packet::Control(ref ctrl) = packet {
+            if let ControlType::NodeWaiting = ctrl.ctrl_type {
+                return true
+            }
+        }
+
+        false
+    }
+
+    pub fn elapsed(&mut self, ms: usize) -> Result<bool, io::Error> {
+        let result = match self.state {
             State::Listening(w) => {
                 let elapsed = ms+w;
                 if elapsed >= LISTEN_TIMEOUT {
-                    (State::Idle, None)
+                    Some(State::Idle)
                 } else {
-                    (State::Listening(elapsed), Some(LISTEN_TIMEOUT - elapsed))
+                    Some(State::Listening(elapsed))
                 }
             },
-            _ => (self.state.clone(), None)
+            State::Negotiating(ref mut ack_state) => {
+                match ack_state.tick(&self.last_packet[..], ms, &mut self.packet_writer) {
+                    Ok(AckResult::Failed) => Some(State::Listening(0)),
+                    Ok(AckResult::Waiting(_next_tick)) => None,
+                    Err(e) => None,
+                    _ => None
+                }
+            },
+            State::Established => None,
+            State::Idle => None
         };
 
-        self.state = new_state;
+        if let Some(new_state) = result {
+            self.state = new_state;
+        }
 
-        Ok(next_tick)
+        if let State::Idle = self.state {
+            Ok(false)
+        } else {
+            Ok(true)
+        }
     }
 }
 
@@ -136,7 +252,6 @@ mod test {
 
     #[test]
     fn test_broadcast() {
-
         let callsign = "ki7est";
         let broadcast = BroadcastPacket {
             fec_enabled: true,
