@@ -50,10 +50,11 @@ pub struct DataPacket {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AckPacket {
-    pub packet_id: u16,
+    pub packet_idx: u16,
     pub nack: bool,
-    pub no_response: bool,
-    pub corrected_errors: u8
+    pub response: bool,
+    pub pending_response: bool,
+    pub corrected_errors: u16
 }
 
 #[derive(Debug)]
@@ -132,9 +133,10 @@ const FEC_BYTES_MASK: u8 = 0b0011_1111;
 const BLOCK_SIZE: usize = 255;
 
 //Ack
-const NO_RESPONSE_MASK: u8 = 0b1000_0000;
+const RESPONSE_MASK: u8 = 0b1000_0000;
 const NEGATIVE_ACK_MASK: u8 = 0b0100_0000;
-const CORRECTED_ERR_MASK: u8 = 0b0011_1111;
+const PENDING_RESPONSE_MASK: u8 = 0b0010_0000;
+const CORRECTED_ERR_MASK: u8 = 0b0000_1111;
 
 //Ctrl
 const CONTROL_TYPE_MASK: u8 = 0b0000_0111;
@@ -213,22 +215,29 @@ fn encode_non_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Pa
 fn encode_inner<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, PacketEncodeError> where T: Write {
     match packet {
         &Packet::Ack(ref header) => {
-            let mut seq_id = header.packet_id & ((!DATA_MASK as u16) << 8 | 0xFF);
+            let mut seq_id = header.packet_idx & ((!DATA_MASK as u16) << 8 | 0xFF);
             seq_id = seq_id | ((ACK_MASK as u16) << 8);
             
-            let mut errs_flags = header.corrected_errors & CORRECTED_ERR_MASK;
+            let mut errs_flags: u8 = 0;
             if header.nack {
                 errs_flags = errs_flags | NEGATIVE_ACK_MASK;
             }
 
-            if header.no_response {
-                errs_flags = errs_flags | NO_RESPONSE_MASK;
+            if header.response {
+                errs_flags = errs_flags | RESPONSE_MASK;
             }
 
-            writer.write_u16::<BigEndian>(seq_id)?;
-            writer.write_u8(errs_flags)?;
+            if header.pending_response {
+                errs_flags = errs_flags | PENDING_RESPONSE_MASK;
+            }
 
-            Ok(3)
+            let mut err = header.corrected_errors & ((CORRECTED_ERR_MASK as u16) << 8 | 0xFF);
+            err = err | ((errs_flags as u16) << 8);
+
+            writer.write_u16::<BigEndian>(seq_id)?;
+            writer.write_u16::<BigEndian>(err)?;
+
+            Ok(4)
         },
         &Packet::Broadcast(ref header) => {
             let mut packet_type = BROADCAST_MASK;
@@ -418,19 +427,26 @@ fn decode_data<'a>(header: &[u8], payload: &'a [u8]) -> Result<Packet<'a>, Packe
 }
 
 fn decode_ack<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
-    if data.len() != 3 {
+    if data.len() != 4 {
         return Err(PacketDecodeError::BadFormat)
     }
 
-    let packet_id = decode_sequence_id(&data[0..2])?;
+    let packet_idx = decode_sequence_id(&data[0..2])?;
     let nack = data[2] & NEGATIVE_ACK_MASK == NEGATIVE_ACK_MASK;
-    let no_response = data[2] & NO_RESPONSE_MASK == NO_RESPONSE_MASK;
-    let corrected_errors = data[2] & CORRECTED_ERR_MASK;
+    let response = data[2] & RESPONSE_MASK == RESPONSE_MASK;
+    let pending_response = data[2] & PENDING_RESPONSE_MASK == PENDING_RESPONSE_MASK;
+
+    let mut err: [u8; 2] = [0; 2];
+    err.copy_from_slice(&data[2..4]);
+    err[0] = err[0] & CORRECTED_ERR_MASK;
+
+    let corrected_errors = Cursor::new(&err).read_u16::<BigEndian>().map_err(|_| PacketDecodeError::BadFormat)?;
 
     Ok(Packet::Ack(AckPacket {
-        packet_id,
+        packet_idx,
         nack,
-        no_response,
+        response,
+        pending_response,
         corrected_errors
     }))
 }
@@ -536,20 +552,22 @@ mod test {
     fn test_ack() {
         for i in 0..16384 {
             let packet = Packet::Ack(AckPacket {
-                packet_id: i,
+                packet_idx: i,
                 nack: true,
-                no_response: true,
+                response: true,
+                pending_response: true,
                 corrected_errors: 3
             });
 
             verify_packet(packet, 3);
         }
 
-        for i in 0..64 {
+        for i in 0..520 {
             let packet = Packet::Ack(AckPacket {
-                packet_id: 16000,
+                packet_idx: 16000,
                 nack: true,
-                no_response: true,
+                response: true,
+                pending_response: true,
                 corrected_errors: i
             });
 
@@ -558,9 +576,10 @@ mod test {
 
         {
             let packet = Packet::Ack(AckPacket {
-                packet_id: 16000,
+                packet_idx: 16000,
                 nack: false,
-                no_response: false,
+                response: false,
+                pending_response: false,
                 corrected_errors: 3
             });
 
@@ -569,9 +588,10 @@ mod test {
 
         {
             let packet = Packet::Ack(AckPacket {
-                packet_id: 16000,
+                packet_idx: 16000,
                 nack: true,
-                no_response: false,
+                response: false,
+                pending_response: false,
                 corrected_errors: 3
             });
 
@@ -580,9 +600,22 @@ mod test {
 
         {
             let packet = Packet::Ack(AckPacket {
-                packet_id: 16000,
+                packet_idx: 16000,
                 nack: false,
-                no_response: true,
+                response: true,
+                pending_response: false,
+                corrected_errors: 3
+            });
+
+            verify_packet(packet, 3);
+        }
+
+        {
+            let packet = Packet::Ack(AckPacket {
+                packet_idx: 16000,
+                nack: false,
+                response: false,
+                pending_response: true,
                 corrected_errors: 3
             });
 

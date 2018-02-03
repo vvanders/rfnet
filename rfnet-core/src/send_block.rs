@@ -17,10 +17,10 @@ pub struct SendBlock<R> where R: io::Read {
 }
 
 pub struct SendStats {
-    bytes_sent: usize,
-    packets_sent: usize,
-    missed_acks: usize,
-    recv_bit_err: usize
+    pub bytes_sent: usize,
+    pub packets_sent: usize,
+    pub missed_acks: usize,
+    pub recv_bit_err: usize
 }
 
 struct SendConfig {
@@ -163,14 +163,14 @@ impl<R> SendBlock<R> where R: io::Read {
                 }
             },
             &Packet::Ack(ref ack) => {
-                if ack.packet_id == self.packet_idx {
+                if ack.packet_idx == self.packet_idx {
                     self.stats.recv_bit_err += ack.corrected_errors as usize;
 
                     if ack.nack {
                         self.resend(last_packet, packet_writer)?;
                     } else {
                         if self.eof {
-                            if ack.no_response {
+                            if !ack.response {
                                 return Ok(SendResult::CompleteNoResponse)
                             } else {
                                 return Ok(SendResult::CompleteResponse)
