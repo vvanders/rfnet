@@ -170,7 +170,7 @@ impl<T> RecvBlock<T> where T: io::Write {
                     //We alread heard this so re-ack it
                     Self::send_ack(packet_idx, 0, self.fec, packet_writer)?;
                 }
-            },
+            }
             _ => {}
         }
 

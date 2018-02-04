@@ -8,6 +8,7 @@ pub struct SendBlock<R> where R: io::Read {
     packet_idx: u16,
     eof: bool,
     suspended: bool,
+    pending_response: bool,
     last_send: usize,
     retry_attempts: usize,
     stats: SendStats,
@@ -16,6 +17,7 @@ pub struct SendBlock<R> where R: io::Read {
     payload_scratch: Vec<u8>
 }
 
+#[derive(Debug)]
 pub struct SendStats {
     pub bytes_sent: usize,
     pub packets_sent: usize,
@@ -35,13 +37,16 @@ pub struct RetryConfig {
     retry_attempts: usize
 }
 
+#[derive(Debug)]
 pub enum SendResult<'a> {
     Status(&'a SendStats),
     Suspended,
+    PendingResponse,
     CompleteNoResponse,
     CompleteResponse
 }
 
+#[derive(Debug)]
 pub enum SendError {
     Io(io::Error),
     Encode(PacketEncodeError),
@@ -61,7 +66,7 @@ impl From<PacketEncodeError> for SendError {
 }
 
 impl<R> SendBlock<R> where R: io::Read {
-    pub fn new(data_reader: R, session_id: u16, link_width: usize, fec: bool, start_ms: usize, retry_config: RetryConfig) -> SendBlock<R> {
+    pub fn new(data_reader: R, session_id: u16, link_width: usize, fec: bool, retry_config: RetryConfig) -> SendBlock<R> {
         let fec = if fec {
             Some(0)
         } else {
@@ -74,6 +79,7 @@ impl<R> SendBlock<R> where R: io::Read {
             packet_idx: 0,
             eof: false,
             suspended: false,
+            pending_response: false,
             last_send: 0,
             retry_attempts: 0,
             stats: SendStats {
@@ -98,6 +104,8 @@ impl<R> SendBlock<R> where R: io::Read {
         loop {
             let remaining = ::std::cmp::min(link_width - out.len(), scratch.len());
             let read = packet_read.read(&mut scratch[..remaining])?;
+
+            out.extend_from_slice(&scratch[..read]);
 
             if read == 0 {
                 return Ok(true)
@@ -148,7 +156,7 @@ impl<R> SendBlock<R> where R: io::Read {
         Ok(())
     }
 
-    pub fn send<W>(&mut self, packet: &Packet, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: io::Write {
+    pub fn send<W>(&mut self, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: io::Write {
         let packet_idx = self.session_id;
         self.send_data(packet_idx, last_packet, packet_writer)?;
 
@@ -169,7 +177,10 @@ impl<R> SendBlock<R> where R: io::Read {
                     if ack.nack {
                         self.resend(last_packet, packet_writer)?;
                     } else {
-                        if self.eof {
+                        if ack.pending_response {
+                            self.pending_response = true;
+                            return Ok(SendResult::PendingResponse)
+                        } else if self.pending_response {
                             if !ack.response {
                                 return Ok(SendResult::CompleteNoResponse)
                             } else {
@@ -200,5 +211,67 @@ impl<R> SendBlock<R> where R: io::Read {
         }
 
         Ok(SendResult::Status(&self.stats))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_send() {
+        let data = (0..16).collect::<Vec<u8>>();
+        let retry = RetryConfig {
+            delay_ms: 0,
+            bps: 1200,
+            bps_scale: 1.0,
+            retry_attempts: 5
+        };
+
+        let mut last_packet = vec!();
+        let mut output = vec!();
+
+        let mut send = SendBlock::new(io::Cursor::new(&data), 1000, 32, true, retry);
+
+        match send.send(&mut last_packet, &mut output).unwrap() {
+            SendResult::Status(_) => {
+                let decoded = decode(&mut output[..], true).unwrap();
+                if let &(Packet::Data(ref header, payload),_) = &decoded {
+                    assert_eq!(header.packet_idx, 1000);
+                    assert_eq!(header.start_flag, true);
+                    assert_eq!(header.end_flag, true);
+                    assert_eq!(header.fec_bytes, 0);
+
+                    let mut dpayload = vec!();
+                    decode_data_blocks(header, payload, true, &mut dpayload).unwrap();
+                    assert_eq!(dpayload, data);
+                } else {
+                    panic!("{:?}", decoded);
+                }
+            },
+            o => panic!("{:?}", o)
+        }
+        output.clear();
+
+        let mut ack = AckPacket {
+            packet_idx: 0,
+            nack: false,
+            pending_response: true,
+            response: false,
+            corrected_errors: 5
+        };
+
+        match send.on_packet(&Packet::Ack(ack.clone()), &mut last_packet, &mut output).unwrap() {
+            SendResult::PendingResponse => {},
+            o => panic!("{:?}", o)
+        }
+
+        ack.pending_response = false;
+        ack.response = false;
+
+        match send.on_packet(&Packet::Ack(ack), &mut last_packet, &mut output).unwrap() {
+            SendResult::CompleteNoResponse => {},
+            o => panic!("{:?}", o)
+        }
     }
 }
