@@ -97,6 +97,10 @@ impl<R> SendBlock<R> where R: io::Read {
         }
     }
 
+    pub fn get_stats(&self) -> &SendStats {
+        &self.stats
+    }
+
     fn fill_payload(packet_read: &mut R, out: &mut Vec<u8>, link_width: usize) -> Result<bool, io::Error> {
         out.clear();
         let mut scratch: [u8; 256] = unsafe { ::std::mem::uninitialized() };
@@ -204,7 +208,7 @@ impl<R> SendBlock<R> where R: io::Read {
 
     pub fn tick<W>(&mut self, elapsed_ms: usize, last_packet: &Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: io::Write {
         self.last_send = self.last_send + elapsed_ms;
-        let next_retry = ((self.retry_config.bps * 8 * last_packet.len()) as f32 * self.retry_config.bps_scale) as usize + self.retry_config.delay_ms;
+        let next_retry = ((self.retry_config.bps * 8 * last_packet.len()) as f32 * (self.retry_config.bps_scale / 1000.0)) as usize + self.retry_config.delay_ms;
 
         if self.last_send > next_retry {
             self.resend(last_packet, packet_writer)?;
@@ -217,6 +221,36 @@ impl<R> SendBlock<R> where R: io::Read {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_suspend() {
+        let data = (0..16).collect::<Vec<u8>>();
+        let retry = RetryConfig {
+            delay_ms: 0,
+            bps: 1200,
+            bps_scale: 1.0,
+            retry_attempts: 5
+        };
+        
+        let mut last_packet = vec!();
+        let mut output = vec!();
+
+        let mut send = SendBlock::new(io::Cursor::new(&data), 1000, 32, true, retry);
+
+        send.send(&mut last_packet, &mut output).unwrap();
+
+        let suspend = Packet::Control(ControlPacket {
+            ctrl_type: ControlType::NodeWaiting,
+            session_id: 1000,
+            source_callsign: "ki7est".as_bytes(),
+            dest_callsign: "ki7est".as_bytes()
+        });
+
+        match send.on_packet(&suspend, &mut last_packet, &mut output).unwrap() {
+            SendResult::Suspended => {},
+            o => panic!("{:?}", o)
+        }
+    }
 
     #[test]
     fn test_send() {
@@ -266,6 +300,8 @@ mod test {
             o => panic!("{:?}", o)
         }
 
+        assert_eq!(send.get_stats().recv_bit_err, 5);
+
         ack.pending_response = false;
         ack.response = false;
 
@@ -273,5 +309,43 @@ mod test {
             SendResult::CompleteNoResponse => {},
             o => panic!("{:?}", o)
         }
+    }
+
+    #[test]
+    fn test_resend() {
+        let data = (0..16).collect::<Vec<u8>>();
+        let retry = RetryConfig {
+            delay_ms: 0,
+            bps: 1200,
+            bps_scale: 1.0,
+            retry_attempts: 5
+        };
+
+        let mut last_packet = vec!();
+        let mut output = vec!();
+
+        let mut send = SendBlock::new(io::Cursor::new(&data), 1000, 32, true, retry);
+        send.send(&mut last_packet, &mut output).unwrap();
+
+        let expected_resend = (output.len() * 8 * 1000) / 1200;
+
+        for i in 0..5 {
+            output.clear();
+
+            send.tick(expected_resend * 2, &mut last_packet, &mut output).unwrap();
+
+            assert_eq!(send.get_stats().missed_acks, i+1);
+            match decode(&mut output[..], true).unwrap() {
+                (Packet::Data(header, payload),_) => {},
+                o => panic!("{:?}", o)
+            }
+        }
+
+        match send.tick(expected_resend * 2, &mut last_packet, &mut output) {
+            Err(SendError::TimeOut) => {},
+            o => panic!("{:?}", o)
+        }
+
+        assert_eq!(send.get_stats().missed_acks, 6);
     }
 }
