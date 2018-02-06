@@ -10,11 +10,11 @@ pub struct SendBlock<R> where R: io::Read {
     suspended: bool,
     pending_response: bool,
     last_send: usize,
+    last_send_bytes: usize,
     retry_attempts: usize,
     stats: SendStats,
     config: SendConfig,
-    retry_config: RetryConfig,
-    payload_scratch: Vec<u8>
+    retry_config: RetryConfig
 }
 
 #[derive(Debug)]
@@ -81,6 +81,7 @@ impl<R> SendBlock<R> where R: io::Read {
             suspended: false,
             pending_response: false,
             last_send: 0,
+            last_send_bytes: 0,
             retry_attempts: 0,
             stats: SendStats {
                 bytes_sent: 0,
@@ -92,8 +93,7 @@ impl<R> SendBlock<R> where R: io::Read {
                 fec,
                 link_width
             },
-            retry_config,
-            payload_scratch: Vec::with_capacity(link_width)
+            retry_config
         }
     }
 
@@ -101,31 +101,10 @@ impl<R> SendBlock<R> where R: io::Read {
         &self.stats
     }
 
-    fn fill_payload(packet_read: &mut R, out: &mut Vec<u8>, link_width: usize) -> Result<bool, io::Error> {
-        out.clear();
-        let mut scratch: [u8; 256] = unsafe { ::std::mem::uninitialized() };
-
-        loop {
-            let remaining = ::std::cmp::min(link_width - out.len(), scratch.len());
-            let read = packet_read.read(&mut scratch[..remaining])?;
-
-            out.extend_from_slice(&scratch[..read]);
-
-            if read == 0 {
-                return Ok(true)
-            }
-
-            if out.len() == link_width {
-                return Ok(false)
-            }
-        }
-    }
-
     fn send_data<W>(&mut self, packet_idx: u16, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<(), SendError> where W: io::Write {
         self.retry_attempts = 0;
         self.last_send = 0;
 
-        self.eof = Self::fill_payload(&mut self.data_reader, &mut self.payload_scratch, self.config.link_width)?;
         let header = DataPacket {
             packet_idx: packet_idx,
             fec_bytes: self.config.fec.unwrap_or(0),
@@ -133,14 +112,14 @@ impl<R> SendBlock<R> where R: io::Read {
             end_flag: self.eof
         };
 
-        let packet = Packet::Data(header, &self.payload_scratch[..]);
-
         last_packet.clear();
-        encode(&packet, self.config.fec.is_some(), last_packet)?;
+        let (_, data_written, eof) = encode_data(header, self.config.fec.is_some(), self.config.link_width, &mut self.data_reader, last_packet)?;
+        self.eof = eof;
 
-        packet_writer.write(&last_packet[..])?;
+        packet_writer.write_all(&last_packet[..])?;
 
         self.stats.packets_sent += 1;
+        self.last_send_bytes = data_written;
 
         Ok(())
     }
@@ -192,7 +171,7 @@ impl<R> SendBlock<R> where R: io::Read {
                             }
                         } else {
                             self.packet_idx = self.packet_idx + 1;
-                            self.stats.bytes_sent += last_packet.len();
+                            self.stats.bytes_sent += self.last_send_bytes;
 
                             let packet_idx = self.packet_idx;
                             self.send_data(packet_idx, last_packet, packet_writer)?;
@@ -347,5 +326,99 @@ mod test {
         }
 
         assert_eq!(send.get_stats().missed_acks, 6);
+    }
+
+    #[test]
+    fn send_large() {
+        let data = (0..4096).map(|v| v as u8).collect::<Vec<u8>>();
+        let retry = RetryConfig {
+            delay_ms: 0,
+            bps: 1200,
+            bps_scale: 1.0,
+            retry_attempts: 5
+        };
+
+        let mut last_packet = vec!();
+        let mut output = vec!();
+        let mut final_data = vec!();
+
+        let link_width = 32;
+        let bytes_per_packet = link_width - 2;
+
+        let mut send = SendBlock::new(io::Cursor::new(&data), 1000, link_width, true, retry);
+
+        match send.send(&mut last_packet, &mut output).unwrap() {
+            SendResult::Status(_) => {},
+            o => panic!("{:?}", o)
+        }
+
+        fn ack_packet<'a>(idx: u16, err: u16, pending: bool) -> Packet<'a> {
+            Packet::Ack( AckPacket {
+                packet_idx: idx,
+                nack: false,
+                pending_response: pending,
+                response: false,
+                corrected_errors: err
+            })
+        }
+
+        let remaining_full = data.len() / bytes_per_packet;
+
+        for i in 0..remaining_full {
+            assert_eq!(send.get_stats().packets_sent, i+1);
+
+            let is_end = {
+                let decoded = decode(&mut output[..], true).unwrap();
+                if let &(Packet::Data(ref header, payload),_) = &decoded {
+                    if i == 0 {
+                        assert_eq!(header.packet_idx, 1000);
+                        assert_eq!(header.start_flag, true);
+                    } else if i == remaining_full-1 {
+                        assert_eq!(header.packet_idx, i as u16);
+                        assert_eq!(header.end_flag, true);
+                    } else {
+                        assert_eq!(header.packet_idx, i as u16);
+                    }
+
+                    assert_eq!(header.fec_bytes, 0);
+
+                    let mut dpayload = vec!();
+                    decode_data_blocks(header, payload, true, &mut dpayload).unwrap();
+
+                    final_data.extend_from_slice(&dpayload[..]);
+
+                    header.end_flag
+                } else {
+                    panic!("{:?}", decoded);
+                }
+            };
+
+            output.clear();
+
+            {
+                let result = send.on_packet(&ack_packet(0, 5, is_end), &mut last_packet, &mut output).unwrap();
+                if is_end {
+                    match result {
+                        SendResult::PendingResponse => {},
+                        o => panic!("{:?}", o)
+                    }
+                } else {
+                    match result {
+                        SendResult::Status(_) => {},
+                        o => panic!("{:?}", o)
+                    }
+                }
+            }
+
+            assert_eq!(send.get_stats().bytes_sent, bytes_per_packet * (i+1));
+            assert_eq!(send.get_stats().recv_bit_err, 5 * (i+1));
+        }
+
+        assert_eq!(data, final_data);
+
+        // match send.on_packet(&Packet::Ack(ack), &mut last_packet, &mut output).unwrap() {
+        //     SendResult::CompleteNoResponse => {},
+        //     o => panic!("{:?}", o)
+        // }
     }
 }

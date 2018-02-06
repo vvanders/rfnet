@@ -1,4 +1,4 @@
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Write, Read};
 
 use reed_solomon;
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
@@ -91,7 +91,7 @@ pub fn decode<'a>(data: &'a mut [u8], fec_enabled: bool) -> Result<(Packet<'a>, 
 
 pub fn decode_data_blocks<T>(header: &DataPacket, data: &[u8], fec: bool, out: &mut T) -> Result<usize, DataDecodeError> where T: Write {
     if !fec {
-        out.write(data).map_err(|e| DataDecodeError::Io(e))?;
+        out.write_all(data).map_err(|e| DataDecodeError::Io(e))?;
         return Ok(0)
     }
 
@@ -100,7 +100,7 @@ pub fn decode_data_blocks<T>(header: &DataPacket, data: &[u8], fec: bool, out: &
     let decoder = reed_solomon::Decoder::new(get_fec_bytes(header.fec_bytes));
     for block in data.chunks(BLOCK_SIZE) {
         let (decoded, err) = decoder.correct_err_count(block, None).map_err(|_| DataDecodeError::TooManyFECErrors)?;
-        out.write(decoded.data()).map_err(|e| DataDecodeError::Io(e))?;
+        out.write_all(decoded.data()).map_err(|e| DataDecodeError::Io(e))?;
 
         acc_err += err;
     }
@@ -114,6 +114,76 @@ pub fn encode<'a,T>(packet: &Packet<'a>, fec_enabled: bool, writer: &mut T) -> R
     } else {
         encode_non_fec(packet, writer)
     }
+}
+
+pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: usize, data: &mut R, writer: &mut W) -> Result<(usize, usize, bool), PacketEncodeError> where W: Write, R: Read {
+    let (header_size, fec_bytes) = if fec {
+        (3 + FEC_CRC_BYTES, get_fec_bytes(header.fec_bytes))
+    } else {
+        (3, 0)
+    };
+
+    let data_size = link_width - header_size;
+
+    let block_count = if data_size % 256 != 0 {
+        data_size / 256 + 1
+    } else {
+        data_size / 256
+    };
+
+    let mut scratch_header: [u8; 3] = unsafe { ::std::mem::uninitialized() };
+    {
+        let mut cursor = Cursor::new(&mut scratch_header[..]);
+        encode_inner(&Packet::Data(header, &[]), &mut cursor)?;
+    }
+
+    writer.write_all(&scratch_header)?;
+
+    let encoder = reed_solomon::Encoder::new(fec_bytes);
+    let mut data_written = 0;
+    let mut payload_written = 0;
+    let mut eof = false;
+
+    for _ in 0..block_count {
+        let mut block: [u8; 256] = unsafe { ::std::mem::uninitialized() };
+        let data_block_size = ::std::cmp::min(block.len(), data_size) - fec_bytes;
+
+        let mut block_read = 0;
+        loop {
+            let read = data.read(&mut block[block_read..data_block_size])?;
+
+            block_read += read;
+
+            if read == 0 {
+                eof = true;
+                break;
+            } else if block_read == data_block_size {
+                break;
+            }
+        }
+
+        if fec {
+            let encoded = encoder.encode(&block[..block_read]);
+            writer.write(&**encoded)?;
+            payload_written += encoded.len();
+        } else {
+            writer.write(&block[..block_read])?;
+            payload_written += block_read;
+        }
+
+        data_written += block_read;
+    }
+
+    //Append our header FEC to the end of the packet so we can match what
+    //we do for non-data packets.
+    if fec {
+        let encoder = reed_solomon::Encoder::new(FEC_CRC_BYTES);
+        let encoded = encoder.encode(&scratch_header[..]);
+
+        writer.write_all(encoded.ecc())?;
+    }
+
+    Ok((header_size + payload_written, data_written, eof))
 }
 
 const BROADCAST_MASK: u8 = 0b0000_0000;
@@ -151,24 +221,7 @@ fn get_fec_bytes(fec_count: u8) -> usize {
 fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, PacketEncodeError> where T: Write {
     match packet {
         &Packet::Data(ref header, ref content) => {
-            let mut scratch_header: [u8; 3] = unsafe { ::std::mem::uninitialized() };
-            {
-                let mut cursor = Cursor::new(&mut scratch_header[..]);
-                encode_inner(packet, &mut cursor)?;
-            }
-
-            writer.write(&scratch_header)?;
-
-            let plen = encode_blocks(content, header.fec_bytes, writer)?;
-
-            //Append our header FEC to the end of the packet so we can match what
-            //we do for non-data packets.
-            let encoder = reed_solomon::Encoder::new(FEC_CRC_BYTES);
-            let encoded = encoder.encode(&scratch_header[..]);
-
-            writer.write(encoded.ecc())?;
-
-            Ok(3 + plen + FEC_CRC_BYTES)
+            panic!("Data should be encoded with encode_data");
         },
         _ => {
             //Max size of an inner frame at 2x FEC with 255b frame
@@ -183,7 +236,7 @@ fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Packet
             let encoder = reed_solomon::Encoder::new(len * 2);
             let encoded = encoder.encode(&scratch[..len]);
 
-            writer.write(&**encoded)?;
+            writer.write_all(&**encoded)?;
 
             //Since we have disparate sizes for our FEC types(data vs other)
             //we need to emulate the same way we treat the first 3 bytes in data packets so
@@ -193,7 +246,7 @@ fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Packet
             let crc_encoder = reed_solomon::Encoder::new(FEC_CRC_BYTES);
             let crc_encoded = crc_encoder.encode(&scratch[..3]);
 
-            writer.write(crc_encoded.ecc())?;
+            writer.write_all(crc_encoded.ecc())?;
 
             Ok(encoded.len() + crc_encoded.ecc().len())
         }
@@ -204,7 +257,7 @@ fn encode_non_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Pa
     match packet {
         &Packet::Data(ref _header, ref payload) => {
             let len = encode_inner(packet, writer)?;
-            writer.write(payload)?;
+            writer.write_all(payload)?;
 
             Ok(len+payload.len())
         },
@@ -253,7 +306,7 @@ fn encode_inner<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Pack
             writer.write_u8(header.major_ver)?;
             writer.write_u8(header.minor_ver)?;
             writer.write_u16::<BigEndian>(header.link_width)?;
-            writer.write(header.callsign)?;
+            writer.write_all(header.callsign)?;
 
             Ok(5+header.callsign.len())
         },
@@ -271,9 +324,9 @@ fn encode_inner<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Pack
 
             writer.write_u8(packet_type)?;
             writer.write_u16::<BigEndian>(header.session_id)?;
-            writer.write(header.source_callsign)?;
+            writer.write_all(header.source_callsign)?;
             writer.write_u8(0)?;
-            writer.write(header.dest_callsign)?;
+            writer.write_all(header.dest_callsign)?;
 
             Ok(4 + header.source_callsign.len() + header.dest_callsign.len())
         },
@@ -296,21 +349,6 @@ fn encode_inner<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Pack
             Ok(3)
         }
     }
-}
-
-fn encode_blocks<T>(data: &[u8], fec_bytes: u8, writer: &mut T) -> Result<usize, PacketEncodeError> where T: Write {
-    let fec_bytes = get_fec_bytes(fec_bytes);
-    let encoder = reed_solomon::Encoder::new(fec_bytes);
-    let mut encoded_size = 0;
-
-    for block in data.chunks(BLOCK_SIZE-fec_bytes) {
-        let encoded = encoder.encode(block);
-        writer.write(&**encoded)?;
-
-        encoded_size += (**encoded).len();
-    }
-
-    Ok(encoded_size)
 }
 
 fn decode_fec<'a>(data: &'a mut [u8]) -> Result<(Packet<'a>, usize), PacketDecodeError> {
@@ -502,7 +540,12 @@ mod test {
     fn verify_packet_internal(packet: Packet, fec: bool, mut max_err: usize) {
         let mut scratch = vec!();
 
-        let written = encode(&packet.clone(), fec, &mut scratch).unwrap();
+        let written = if let &Packet::Data(ref header, _) = &packet {
+            encode_data(header.clone(), fec, 4096, &mut Cursor::new(&[]), &mut scratch).unwrap().0
+        } else {
+            encode(&packet.clone(), fec, &mut scratch).unwrap()
+        };
+
         assert_eq!(written, scratch.len());
 
         //FEC tests takes considerable time so only test in release
@@ -762,7 +805,7 @@ mod test {
             end_flag: false
         };
 
-        for i in 0..20 {
+        for i in 1..20 {
             for f in 0..64 {
                 let mut packet = base_packet.clone();
                 packet.fec_bytes = f;
@@ -774,14 +817,14 @@ mod test {
     fn test_data_payload_size(packet: DataPacket, size: usize) {
         let data = (0..size).map(|v| (v & 0xFF) as u8).collect::<Vec<u8>>();
 
-        verify_data_packet(&packet, &data[..], true);
-        verify_data_packet(&packet, &data[..], false);
+        verify_data_packet(&packet, &data[..], true, size);
+        verify_data_packet(&packet, &data[..], false, size);
     }
 
-    fn verify_data_packet(packet: &DataPacket, data: &[u8], fec: bool) {
+    fn verify_data_packet(packet: &DataPacket, data: &[u8], fec: bool, size: usize) {
         let mut scratch = vec!();
 
-        let written = encode(&Packet::Data(packet.clone(), data), fec, &mut scratch).unwrap();
+        let (written, data_written, eof) = encode_data(packet.clone(), fec, 4096, &mut Cursor::new(data), &mut scratch).unwrap();
         assert_eq!(written, scratch.len());
 
         //FEC tests takes considerable time so only test in release
@@ -831,5 +874,61 @@ mod test {
 
         assert_eq!(fec_err, err);
         assert_eq!(&decoded[..], data);
+    }
+
+    #[test]
+    fn test_data_payload_fec() {
+        let base_packet = DataPacket {
+            packet_idx: 0,
+            fec_bytes: 0,
+            start_flag: false,
+            end_flag: false
+        };
+
+        for f in 0..64 {
+            let mut packet = base_packet.clone();
+            packet.fec_bytes = f;
+            let data = (0..512).map(|v| v as u8).collect::<Vec<u8>>();
+
+            let mut scratch = vec!();
+            let (written, data_written, eof) = encode_data(packet.clone(), true, 256, &mut Cursor::new(data), &mut scratch).unwrap();
+
+            assert_eq!(data_written, 256 - get_fec_bytes(f) - 9);
+            assert_eq!(written, 256);
+            assert_eq!(eof, false);
+        }
+    }
+
+    #[test]
+    fn test_data_payload_eof() {
+        let base_packet = DataPacket {
+            packet_idx: 0,
+            fec_bytes: 0,
+            start_flag: false,
+            end_flag: false
+        };
+
+        let mut packet = base_packet.clone();
+        packet.fec_bytes = 0;
+        let data = (0..300).map(|v| v as u8).collect::<Vec<u8>>();
+
+        let mut scratch = vec!();
+        let mut read = Cursor::new(data);
+        {
+            let (written, data_written, eof) = encode_data(packet.clone(), true, 256, &mut read, &mut scratch).unwrap();
+
+            assert_eq!(data_written, 256 - get_fec_bytes(packet.fec_bytes) - 9);
+            assert_eq!(written, 256);
+            assert_eq!(eof, false);
+        }
+
+        {
+            let (written, data_written, eof) = encode_data(packet.clone(), true, 256, &mut read, &mut scratch).unwrap();
+
+            let data_size = 300 - (256 - get_fec_bytes(packet.fec_bytes) - 9);
+            assert_eq!(data_written, data_size);
+            assert_eq!(written, data_size + 2 + 9);
+            assert_eq!(eof, true);
+        }
     }
 }
