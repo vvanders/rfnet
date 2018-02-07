@@ -192,6 +192,13 @@ pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: usize, data: 
     Ok((header_size + payload_written, data_written, eof))
 }
 
+pub fn data_bytes_per_packet(fec: Option<u8>, link_width: usize) -> usize {
+    match fec {
+        Some(fec_bytes) => link_width - 3 - FEC_CRC_BYTES - get_fec_bytes(fec_bytes),
+        None => link_width - 3
+    }
+}
+
 const BROADCAST_MASK: u8 = 0b0000_0000;
 const DATA_MASK: u8 = 0b0100_0000;
 const ACK_MASK: u8 = 0b1000_0000;
@@ -844,9 +851,9 @@ mod test {
 
         //FEC tests takes considerable time so only test in release
         let mut max_err = get_fec_bytes(packet.fec_bytes) / 2;
-        // if cfg!(debug_assertions) {
-        //     max_err = 0;
-        // }
+        if cfg!(debug_assertions) {
+            max_err = 0;
+        }
 
         if fec && scratch.len() > 9 {
             for e in 0..max_err {
