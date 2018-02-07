@@ -145,7 +145,7 @@ pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: usize, data: 
     let mut eof = false;
 
     for _ in 0..block_count {
-        let mut block: [u8; 256] = unsafe { ::std::mem::uninitialized() };
+        let mut block: [u8; BLOCK_SIZE] = unsafe { ::std::mem::uninitialized() };
         let data_block_size = ::std::cmp::min(block.len(), data_size) - fec_bytes;
 
         let mut block_read = 0;
@@ -163,15 +163,21 @@ pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: usize, data: 
         }
 
         if fec {
-            let encoded = encoder.encode(&block[..block_read]);
-            writer.write(&**encoded)?;
-            payload_written += encoded.len();
+            if block_read != 0 {
+                let encoded = encoder.encode(&block[..block_read]);
+                writer.write(&**encoded)?;
+                payload_written += encoded.len();
+            }
         } else {
             writer.write(&block[..block_read])?;
             payload_written += block_read;
         }
 
         data_written += block_read;
+
+        if eof {
+            break;
+        }
     }
 
     //Append our header FEC to the end of the packet so we can match what
@@ -561,10 +567,11 @@ mod test {
 
         if fec {
             for e in 0..max_err {
-                let mut stride = scratch.len() - e;
-                if !is_data {
-                    stride = stride - FEC_CRC_BYTES;
-                }
+                let mut stride = if !is_data {
+                    scratch.len() - e - FEC_CRC_BYTES
+                } else {
+                    3 - e
+                };
 
                 for i in 0..stride {
                     let mut corrupt = scratch.clone();
@@ -583,6 +590,14 @@ mod test {
 
     fn verify_decode(mut data: Vec<u8>, packet: Packet, fec: bool, errs: usize) {
         match decode(&mut data[..], fec) {
+            Ok((Packet::Data(header, _),e)) => {
+                if let Packet::Data(match_header,_) = packet {
+                    assert_eq!(header, match_header);
+                    assert_eq!(e, errs);
+                } else {
+                    panic!();
+                }
+            },
             Ok((p,e)) => {
                 assert_eq!(p, packet);
                 assert_eq!(e, errs);
@@ -829,9 +844,9 @@ mod test {
 
         //FEC tests takes considerable time so only test in release
         let mut max_err = get_fec_bytes(packet.fec_bytes) / 2;
-        if cfg!(debug_assertions) {
-            max_err = 0;
-        }
+        // if cfg!(debug_assertions) {
+        //     max_err = 0;
+        // }
 
         if fec && scratch.len() > 9 {
             for e in 0..max_err {
@@ -870,6 +885,7 @@ mod test {
 
     fn verify_data_blocks(packet: &DataPacket, payload: &[u8], data: &[u8], fec:bool, err: usize) {
         let mut decoded = vec!();
+
         let fec_err = decode_data_blocks(packet, payload, fec, &mut decoded).unwrap();
 
         assert_eq!(fec_err, err);
@@ -891,10 +907,10 @@ mod test {
             let data = (0..512).map(|v| v as u8).collect::<Vec<u8>>();
 
             let mut scratch = vec!();
-            let (written, data_written, eof) = encode_data(packet.clone(), true, 256, &mut Cursor::new(data), &mut scratch).unwrap();
+            let (written, data_written, eof) = encode_data(packet.clone(), true, BLOCK_SIZE, &mut Cursor::new(data), &mut scratch).unwrap();
 
-            assert_eq!(data_written, 256 - get_fec_bytes(f) - 9);
-            assert_eq!(written, 256);
+            assert_eq!(data_written, BLOCK_SIZE - get_fec_bytes(f) - 9);
+            assert_eq!(written, BLOCK_SIZE);
             assert_eq!(eof, false);
         }
     }
