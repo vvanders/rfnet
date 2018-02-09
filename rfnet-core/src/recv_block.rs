@@ -13,6 +13,7 @@ pub struct RecvBlock<T> where T: io::Write {
     decode_block: Vec<u8>
 }
 
+#[derive(Debug)]
 pub struct RecvStats {
     pub recv_bytes: usize,
     pub recv_bit_err: usize,
@@ -20,12 +21,14 @@ pub struct RecvStats {
     pub acks_sent: usize
 }
 
+#[derive(Debug)]
 pub enum RecvResult<'a> {
     Status(&'a RecvStats),
     CompleteSendResponse,
     Complete
 }
 
+#[derive(Debug)]
 pub enum RecvError {
     Io(io::Error),
     Decode(PacketDecodeError),
@@ -125,7 +128,7 @@ impl<T> RecvBlock<T> where T: io::Write {
         Ok(())
     }
 
-    pub fn on_packet<W>(&mut self, (packet, err): (&Packet, usize), packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: io::Write {
+    pub fn on_packet<W>(&mut self, &(ref packet, err): &(Packet, usize), packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: io::Write {
         match packet {
             &Packet::Data(ref header, payload) => {
                 let packet_idx = if header.start_flag {
@@ -136,7 +139,7 @@ impl<T> RecvBlock<T> where T: io::Write {
 
                 if self.packet_idx == 0 && header.start_flag && header.packet_idx != self.session_id {
                     Self::send_nack(0, self.fec, packet_writer)?;
-                } else if header.packet_idx == self.packet_idx {
+                } else if packet_idx == self.packet_idx {
                     //try to decode, technically we could let the client handle this but then they'd have to be
                     //responsible for "rewinding" on FEC error.
                     self.decode_block.clear();
@@ -210,5 +213,77 @@ impl<T> RecvBlock<T> where T: io::Write {
         encode(&packet, self.fec, packet_writer).map(|_| ())?;
 
         Ok(RecvResult::Complete)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn gen_data<'a>(packet_idx: u16, start_flag: bool, end_flag: bool, data: &[u8], err: usize, packet_holder: &'a mut Vec<u8>) -> (Packet<'a>,usize) {
+        packet_holder.clear();
+
+        let header = DataPacket {
+            packet_idx,
+            fec_bytes: 0,
+            start_flag,
+            end_flag
+        };
+
+        encode_data(header, true, 2048, &mut io::Cursor::new(data), packet_holder).unwrap();
+        (decode(packet_holder, true).unwrap().0, err)
+    }
+
+    #[test]
+    fn test_recv() {
+        let mut recv_data = vec!();
+        let payload = (0..16).collect::<Vec<u8>>();
+
+        {
+            let mut recv = RecvBlock::new(1000, true, &mut recv_data);
+
+            let mut output = vec!();
+            let mut data_packet = vec!();
+
+            match recv.on_packet(&gen_data(1000, true, false, &payload[..], 5, &mut data_packet), &mut output) {
+                Ok(RecvResult::Status(_)) => {},
+                o => panic!("{:?}", o)
+            }
+
+            match decode(&mut output[..], true) {
+                Ok((Packet::Ack(ack),_)) => {
+                    assert_eq!(ack.packet_idx, 0);
+                    assert_eq!(ack.corrected_errors, 5);
+                    assert_eq!(ack.pending_response, false);
+                    assert_eq!(ack.nack, false);
+                },
+                o => panic!("{:?}", o)
+            }
+
+            output.clear();
+
+            match recv.on_packet(&gen_data(1, false, true, &payload[..], 5, &mut data_packet), &mut output) {
+                Ok(RecvResult::CompleteSendResponse) => {},
+                o => panic!("{:?}", o)
+            }
+
+            match decode(&mut output[..], true) {
+                Ok((Packet::Ack(ack),_)) => {
+                    assert_eq!(ack.packet_idx, 1);
+                    assert_eq!(ack.corrected_errors, 5);
+                    assert_eq!(ack.pending_response, true);
+                    assert_eq!(ack.nack, false);
+                },
+                o => panic!("{:?}", o)
+            }
+
+            output.clear();
+        }
+
+        let mut final_data = vec!();
+        final_data.extend_from_slice(&payload[..]);
+        final_data.extend_from_slice(&payload[..]);
+
+        assert_eq!(final_data, recv_data);
     }
 }

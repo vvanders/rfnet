@@ -364,6 +364,8 @@ mod test {
         let remaining_full = data.len() / bytes_per_packet+1;
 
         for i in 0..remaining_full {
+            assert!(output.len() <= link_width, "{} <= {}", output.len(), link_width);
+
             assert_eq!(send.get_stats().packets_sent, i+1);
 
             let is_end = {
