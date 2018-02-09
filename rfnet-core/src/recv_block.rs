@@ -7,7 +7,9 @@ pub struct RecvBlock<T> where T: io::Write {
     fec: bool,
     packet_idx: u16,
     last_heard: usize,
+    last_sent: usize,
     waiting_for_response: bool,
+    response: Option<bool>,
     data_output: T,
     stats: RecvStats,
     decode_block: Vec<u8>
@@ -74,7 +76,9 @@ impl<T> RecvBlock<T> where T: io::Write {
             fec,
             packet_idx: 0,
             last_heard: 0,
+            last_sent: 0,
             waiting_for_response: false,
+            response: None,
             data_output,
             stats: RecvStats {
                 recv_bytes: 0,
@@ -128,6 +132,20 @@ impl<T> RecvBlock<T> where T: io::Write {
         Ok(())
     }
 
+    fn send_response_result<W>(response: Option<bool>, packet_idx: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: io::Write {
+        let packet = Packet::Ack(AckPacket {
+            packet_idx: packet_idx,
+            nack: false,
+            response: response.unwrap(),
+            pending_response: false,
+            corrected_errors: 0
+        });
+
+        encode(&packet, fec, packet_writer).map(|_| ())?;
+
+        Ok(())
+    }
+
     pub fn on_packet<W>(&mut self, &(ref packet, err): &(Packet, usize), packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: io::Write {
         match packet {
             &Packet::Data(ref header, payload) => {
@@ -174,6 +192,13 @@ impl<T> RecvBlock<T> where T: io::Write {
                     Self::send_ack(packet_idx, 0, self.fec, packet_writer)?;
                 }
             }
+            &Packet::Ack(ref ack) => {
+                if !self.waiting_for_response {
+                    return Err(RecvError::NotResponding)
+                }
+
+                return Ok(RecvResult::Complete)
+            }
             _ => {}
         }
 
@@ -184,9 +209,17 @@ impl<T> RecvBlock<T> where T: io::Write {
         self.last_heard += elapsed_ms;
 
         if self.waiting_for_response {
-            if self.last_heard > PENDING_REPEAT_MS {
-                Self::send_pending_response(self.packet_idx, 0, self.fec, packet_writer)?;
-                self.last_heard = 0;
+            if self.last_sent > PENDING_REPEAT_MS {
+                if self.response.is_none() {
+                    Self::send_pending_response(self.packet_idx, 0, self.fec, packet_writer)?;
+                } else {
+                    if self.last_heard > TIMEOUT_MS {
+                        return Err(RecvError::TimedOut)
+                    }
+
+                    Self::send_response_result(self.response, self.packet_idx, self.fec, packet_writer)?;
+                }
+                self.last_sent = 0;
             }
         } else {
             if self.last_heard > TIMEOUT_MS {
@@ -202,17 +235,12 @@ impl<T> RecvBlock<T> where T: io::Write {
             return Err(RecvError::NotResponding)
         }
 
-        let packet = Packet::Ack(AckPacket {
-            packet_idx: self.packet_idx,
-            nack: false,
-            response: is_response,
-            pending_response: false,
-            corrected_errors: 0
-        });
+        self.response = Some(is_response);
+        self.last_heard = 0;
 
-        encode(&packet, self.fec, packet_writer).map(|_| ())?;
+        Self::send_response_result(self.response, self.packet_idx, self.fec, packet_writer)?;
 
-        Ok(RecvResult::Complete)
+        Ok(RecvResult::CompleteSendResponse)
     }
 }
 
@@ -278,6 +306,30 @@ mod test {
             }
 
             output.clear();
+
+            recv.send_response(true, &mut output).unwrap();
+
+            match decode(&mut output[..], true) {
+                Ok((Packet::Ack(ack), _)) => {
+                    assert_eq!(ack.packet_idx, 1);
+                    assert_eq!(ack.pending_response, false);
+                    assert_eq!(ack.response, true);
+                },
+                o => panic!("{:?}", o)
+            }
+
+            let response_ack = AckPacket {
+                packet_idx: 1,
+                pending_response: false,
+                response: false,
+                corrected_errors: 0,
+                nack: false
+            };
+
+            match recv.on_packet(&(Packet::Ack(response_ack),0), &mut output) {
+                Ok(RecvResult::Complete) => {},
+                o => panic!("{:?}", o)
+            }
         }
 
         let mut final_data = vec!();
@@ -285,5 +337,49 @@ mod test {
         final_data.extend_from_slice(&payload[..]);
 
         assert_eq!(final_data, recv_data);
+    }
+
+    #[test]
+    fn test_timeout() {
+        let mut data = vec!();
+        let mut recv = RecvBlock::new(1000, true, &mut data);
+        let mut output = vec!();
+
+        match recv.tick(10, &mut output) {
+            Ok(RecvResult::Status(_)) => {},
+            o => panic!("{:?}", o)
+        }
+
+        match recv.tick(TIMEOUT_MS - 10 + 1, &mut output) {
+            Err(RecvError::TimedOut) => {},
+            o => panic!("{:?}", o)
+        }
+
+        assert_eq!(output.len(), 0);
+    }
+
+    #[test]
+    fn test_resend_response() {
+        panic!()
+    }
+
+    #[test]
+    fn test_repeat_pending() {
+        panic!()
+    }
+
+    #[test]
+    fn test_nack() {
+        panic!()
+    }
+
+    #[test]
+    fn test_reack() {
+        panic!()
+    }
+
+    #[test]
+    fn test_suspend() {
+        panic!()
     }
 }
