@@ -37,7 +37,7 @@ pub const CMD_RETURN: u8 = 0xFF;
 
 /// Encodes a series of bytes into a KISS frame.
 #[allow(dead_code)]
-pub fn encode<R,W>(data: &mut R, encoded: &mut W, port: u8) -> io::Result<usize> where R: io::Read, W: io::Write {
+pub fn encode<R,W>(mut data: R, mut encoded: W, port: u8) -> io::Result<usize> where R: io::Read, W: io::Write {
     trace!("Encoding KISS frame for port {}", port);
 
     let mut written: usize = 0;
@@ -61,7 +61,7 @@ pub fn encode<R,W>(data: &mut R, encoded: &mut W, port: u8) -> io::Result<usize>
                 match n {
                     0 => break,
                     _ => {
-                        match encode_part(&scratch[..n], encoded) {
+                        match encode_part(&scratch[..n], &mut encoded) {
                             Ok(w) => written += w,
                             Err(e) => return Err(e)
                         }
@@ -84,7 +84,7 @@ pub fn encode<R,W>(data: &mut R, encoded: &mut W, port: u8) -> io::Result<usize>
     Ok(written)
 }
 
-pub fn encode_part<W>(data: &[u8], encoded: &mut W) -> io::Result<usize> where W: io::Write {
+pub fn encode_part<W>(data: &[u8], mut encoded: W) -> io::Result<usize> where W: io::Write {
     let encode = data.iter().cloned().map(|byte| {
         match byte {
             FEND => (FESC, Some(TFEND)),

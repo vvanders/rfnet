@@ -1,4 +1,5 @@
 use packet::*;
+use framed::FramedWrite;
 
 use std::io;
 
@@ -90,7 +91,7 @@ impl<T> RecvBlock<T> where T: io::Write {
         }
     }
 
-    fn send_nack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: io::Write {
+    fn send_nack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx,
             nack: true,
@@ -99,12 +100,14 @@ impl<T> RecvBlock<T> where T: io::Write {
             corrected_errors: err
         });
 
+        packet_writer.start_frame()?;
         encode(&packet, fec, packet_writer).map(|_| ())?;
+        packet_writer.end_frame()?;
 
         Ok(())
     }
 
-    fn send_ack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: io::Write {
+    fn send_ack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx,
             nack: false,
@@ -113,12 +116,14 @@ impl<T> RecvBlock<T> where T: io::Write {
             corrected_errors: err
         });
 
+        packet_writer.start_frame()?;
         encode(&packet, fec, packet_writer).map(|_| ())?;
+        packet_writer.end_frame()?;
 
         Ok(())
     }
 
-    fn send_pending_response<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: io::Write {
+    fn send_pending_response<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx,
             nack: false,
@@ -127,12 +132,14 @@ impl<T> RecvBlock<T> where T: io::Write {
             corrected_errors: err
         });
 
+        packet_writer.start_frame()?;
         encode(&packet, fec, packet_writer).map(|_| ())?;
+        packet_writer.end_frame()?;
 
         Ok(())
     }
 
-    fn send_response_result<W>(response: Option<bool>, packet_idx: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: io::Write {
+    fn send_response_result<W>(response: Option<bool>, packet_idx: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx: packet_idx,
             nack: false,
@@ -141,12 +148,14 @@ impl<T> RecvBlock<T> where T: io::Write {
             corrected_errors: 0
         });
 
+        packet_writer.start_frame()?;
         encode(&packet, fec, packet_writer).map(|_| ())?;
+        packet_writer.end_frame()?;
 
         Ok(())
     }
 
-    pub fn on_packet<W>(&mut self, &(ref packet, err): &(Packet, usize), packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: io::Write {
+    pub fn on_packet<W>(&mut self, &(ref packet, err): &(Packet, usize), packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: FramedWrite {
         match packet {
             &Packet::Data(ref header, payload) => {
                 let packet_idx = if header.start_flag {
@@ -209,7 +218,7 @@ impl<T> RecvBlock<T> where T: io::Write {
         Ok(RecvResult::Status(&self.stats))
     }
 
-    pub fn tick<W>(&mut self, elapsed_ms: usize, packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: io::Write {
+    pub fn tick<W>(&mut self, elapsed_ms: usize, packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: FramedWrite {
         self.last_heard += elapsed_ms;
         self.last_sent += elapsed_ms;
 
@@ -235,7 +244,7 @@ impl<T> RecvBlock<T> where T: io::Write {
         Ok(RecvResult::Status(&self.stats))
     }
 
-    pub fn send_response<W>(&mut self, is_response: bool, packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: io::Write {
+    pub fn send_response<W>(&mut self, is_response: bool, packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: FramedWrite {
         if !self.waiting_for_response {
             return Err(RecvError::NotResponding)
         }
@@ -560,10 +569,5 @@ mod test {
         }
 
         assert_eq!(recv_data.len(), payload.len());
-    }
-
-    #[test]
-    fn test_suspend() {
-        panic!()
     }
 }

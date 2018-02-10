@@ -7,6 +7,7 @@ extern crate byteorder;
 extern crate simple_logger;
 
 mod kiss;
+mod framed;
 mod packet;
 mod link;
 mod node;

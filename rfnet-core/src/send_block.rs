@@ -1,4 +1,5 @@
 use packet::*;
+use framed::FramedWrite;
 
 use std::io;
 
@@ -6,7 +7,6 @@ pub struct SendBlock<R> where R: io::Read {
     data_reader: R,
     session_id: u16,
     packet_idx: u16,
-    suspended: bool,
     pending_response: bool,
     last_send: usize,
     retry_attempts: usize,
@@ -39,7 +39,6 @@ pub struct RetryConfig {
 #[derive(Debug)]
 pub enum SendResult<'a> {
     Status(&'a SendStats),
-    Suspended,
     PendingResponse,
     CompleteNoResponse,
     CompleteResponse
@@ -71,7 +70,6 @@ impl<R> SendBlock<R> where R: io::Read {
             data_reader,
             session_id, 
             packet_idx: 0,
-            suspended: false,
             pending_response: false,
             last_send: 0,
             retry_attempts: 0,
@@ -98,7 +96,7 @@ impl<R> SendBlock<R> where R: io::Read {
         self.config.fec = fec;
     }
 
-    fn send_data<W>(&mut self, packet_idx: u16, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<(), SendError> where W: io::Write {
+    fn send_data<W>(&mut self, packet_idx: u16, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<(), SendError> where W: FramedWrite {
         self.retry_attempts = 0;
         self.last_send = 0;
 
@@ -115,7 +113,7 @@ impl<R> SendBlock<R> where R: io::Read {
         last_packet.clear();
         let (_bytes, data_written, _eof) = encode_data(header, self.config.fec.is_some(), self.config.link_width, &mut self.data_reader, last_packet)?;
 
-        packet_writer.write_all(&last_packet[..])?;
+        packet_writer.write_frame(&last_packet[..])?;
 
         self.stats.packets_sent += 1;
         self.stats.bytes_sent += data_written;
@@ -123,7 +121,7 @@ impl<R> SendBlock<R> where R: io::Read {
         Ok(())
     }
 
-    fn resend<W>(&mut self, last_packet: &Vec<u8>, packet_writer: &mut W) -> Result<(), SendError> where W: io::Write {
+    fn resend<W>(&mut self, last_packet: &Vec<u8>, packet_writer: &mut W) -> Result<(), SendError> where W: FramedWrite {
         self.retry_attempts += 1;
         self.stats.missed_acks += 1;
 
@@ -131,27 +129,22 @@ impl<R> SendBlock<R> where R: io::Read {
             return Err(SendError::TimeOut)
         }
 
-        packet_writer.write(&last_packet[..])?;
+        packet_writer.write_frame(&last_packet[..])?;
 
         self.stats.packets_sent += 1;
 
         Ok(())
     }
 
-    pub fn send<W>(&mut self, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: io::Write {
+    pub fn send<W>(&mut self, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
         let packet_idx = self.session_id;
         self.send_data(packet_idx, last_packet, packet_writer)?;
 
         Ok(SendResult::Status(&self.stats))
     }
 
-    pub fn on_packet<W>(&mut self, packet: &Packet, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: io::Write {
+    pub fn on_packet<W>(&mut self, packet: &Packet, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
         match packet {
-            &Packet::Control(ref ctrl) => {
-                if let ControlType::NodeWaiting = ctrl.ctrl_type {
-                    return Ok(SendResult::Suspended)
-                }
-            },
             &Packet::Ack(ref ack) => {
                 if ack.packet_idx == self.packet_idx {
                     self.stats.recv_bit_err += ack.corrected_errors as usize;
@@ -183,7 +176,7 @@ impl<R> SendBlock<R> where R: io::Read {
         Ok(SendResult::Status(&self.stats))
     }
 
-    pub fn tick<W>(&mut self, elapsed_ms: usize, last_packet: &Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: io::Write {
+    pub fn tick<W>(&mut self, elapsed_ms: usize, last_packet: &Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
         self.last_send = self.last_send + elapsed_ms;
         let next_retry = ((self.retry_config.bps * 8 * last_packet.len()) as f32 * (self.retry_config.bps_scale / 1000.0)) as usize + self.retry_config.delay_ms;
 
@@ -198,36 +191,6 @@ impl<R> SendBlock<R> where R: io::Read {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[test]
-    fn test_suspend() {
-        let data = (0..16).collect::<Vec<u8>>();
-        let retry = RetryConfig {
-            delay_ms: 0,
-            bps: 1200,
-            bps_scale: 1.0,
-            retry_attempts: 5
-        };
-        
-        let mut last_packet = vec!();
-        let mut output = vec!();
-
-        let mut send = SendBlock::new(io::Cursor::new(&data), data.len(), 1000, 32, Some(0), retry);
-
-        send.send(&mut last_packet, &mut output).unwrap();
-
-        let suspend = Packet::Control(ControlPacket {
-            ctrl_type: ControlType::NodeWaiting,
-            session_id: 1000,
-            source_callsign: "ki7est".as_bytes(),
-            dest_callsign: "ki7est".as_bytes()
-        });
-
-        match send.on_packet(&suspend, &mut last_packet, &mut output).unwrap() {
-            SendResult::Suspended => {},
-            o => panic!("{:?}", o)
-        }
-    }
 
     #[test]
     fn test_send() {
