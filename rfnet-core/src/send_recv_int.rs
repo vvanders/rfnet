@@ -58,7 +58,7 @@ fn cycle_send<'a,W,F>(send: &'a mut SendBlock<W>, send_channel: &mut Vec<u8>, re
 
 #[test]
 fn send_recv_full() {
-    let (send,recv) = cycle_data(|idx, sidx| false, |idx, ridx| false);
+    let (send,recv) = cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
 }
 
 #[test]
@@ -66,29 +66,102 @@ fn send_send_alt() {
     use simple_logger;
     simple_logger::init();
 
-    let (send,recv) = cycle_data(|idx, sidx| false, |idx, ridx| false);
-    let (send_alt,recv_alt) = cycle_data(|idx, sidx| sidx % 2 == 1, |idx, ridx| false);
+    let (send,recv) = cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
+    let (send_alt,recv_alt) = cycle_data(
+        |idx, sidx, data|
+            if sidx % 2 == 1 {
+                data.clear();
+            },
+        |idx, ridx, data| {});
 
     assert_eq!(send.packets_sent*2, send_alt.packets_sent);
     assert_eq!(recv.acks_sent*2, recv_alt.acks_sent);
     assert_eq!(recv_alt.packets_received, send_alt.packets_sent/2);
+    assert_eq!(recv_alt.recv_bit_err, 0);
+    assert_eq!(send_alt.recv_bit_err, 0);
 }
 
 #[test]
 fn send_recv_alt() {
-    use simple_logger;
-    simple_logger::init();
-
-    let (send,recv) = cycle_data(|idx, sidx| false, |idx, ridx| false);
-    let (send_alt,recv_alt) = cycle_data(|idx, sidx| false, |idx, ridx| ridx % 2 == 1);
+    let (send,recv) = cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
+    let (send_alt,recv_alt) = cycle_data(
+        |idx, sidx, data| {},
+        |idx, ridx, data| 
+            if ridx % 2 == 1 {
+                data.clear();
+            });
 
     assert_eq!(send.packets_sent*2, send_alt.packets_sent);
     assert_eq!(recv.acks_sent*2, recv_alt.acks_sent);
     assert_eq!(recv_alt.packets_received-1, send_alt.packets_sent/2);
+    assert_eq!(recv_alt.recv_bit_err, 0);
+    assert_eq!(send_alt.recv_bit_err, 0);
 }
 
-fn cycle_data<S,R>(drop_send_fn: S, drop_recv_fn: R) -> (SendStats, RecvStats)
-        where S: Fn(usize, usize) -> bool, R: Fn(usize, usize) -> bool {
+#[test]
+fn send_flip() {
+    use simple_logger;
+    simple_logger::init();
+
+    let mut errs = 0;
+    let (send,recv) = {
+        let errs_ref = &mut errs;
+
+        cycle_data(|idx, sidx, data| {
+            let mut decode_data = vec!();
+            let decoded = kiss::decode(data.iter().cloned(), &mut decode_data);
+
+            let idx = sidx % decode_data.len();
+            *errs_ref += 1;
+            decode_data[idx] = !decode_data[idx];
+
+            trace!("errref {}", errs_ref);
+
+            data.clear();
+            kiss::encode(io::Cursor::new(&decode_data[..]), data, 0);
+
+        }, |idx, ridx, data| {})
+    };
+
+    assert_eq!(send.recv_bit_err, errs - 1); //Send doesn't hear last ack
+    assert_eq!(recv.recv_bit_err, errs);
+}
+
+#[test]
+fn recv_flip() {
+    use simple_logger;
+    simple_logger::init();
+
+    let mut errs = 0;
+    let (send,recv) = {
+        let errs_ref = &mut errs;
+
+        cycle_data(
+            |idx, sidx, data| {},
+            |idx, ridx, data| {
+                let mut decode_data = vec!();
+                let decoded = kiss::decode(data.iter().cloned(), &mut decode_data);
+
+                let idx = ridx % decode_data.len();
+                *errs_ref += 1;
+                decode_data[idx] = !decode_data[idx];
+
+                trace!("errref {}", errs_ref);
+
+                data.clear();
+                kiss::encode(io::Cursor::new(&decode_data[..]), data, 0);
+            })
+    };
+
+    //Bit flips in acks aren't tracked
+    assert_eq!(send.recv_bit_err, 0);
+    assert_eq!(recv.recv_bit_err, 0);
+}
+
+
+
+fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R) -> (SendStats, RecvStats)
+        where S: FnMut(usize, usize, &mut Vec<u8>), R: FnMut(usize, usize, &mut Vec<u8>) {
     let payload = (0..4096).map(|v| v as u8).collect::<Vec<u8>>();
     let mut received = vec!();
 
@@ -125,10 +198,7 @@ fn cycle_data<S,R>(drop_send_fn: S, drop_recv_fn: R) -> (SendStats, RecvStats)
             if recv_chan.len() > 0 {
                 send_idx += 1;
 
-                if drop_send_fn(i, send_idx) {
-                    trace!("Discarding send packet {}", recv_idx);
-                    recv_chan.clear();
-                }
+                drop_send_fn(i, send_idx, &mut recv_chan);
             }
 
             match cycle_recv(&mut recv, &mut KISSFramedWrite::new(&mut send_chan, 0), &mut recv_chan) {
@@ -142,10 +212,7 @@ fn cycle_data<S,R>(drop_send_fn: S, drop_recv_fn: R) -> (SendStats, RecvStats)
             if send_chan.len() > 0 {
                 recv_idx += 1;
 
-                if drop_recv_fn(i, recv_idx) {
-                    trace!("Discarding recv packet {}", recv_idx);
-                    send_chan.clear();
-                }
+                drop_recv_fn(i, recv_idx, &mut send_chan);
             }
 
             if send_complete && recv_complete {

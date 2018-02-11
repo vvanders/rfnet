@@ -191,7 +191,7 @@ impl<T> RecvBlock<T> where T: io::Write {
                             //Send NACK since we know id
                             Self::send_nack(packet_idx, err as u16, self.fec, packet_writer)?;
 
-                            return Err(RecvError::Decode(PacketDecodeError::TooManyFECErrors));
+                            return Ok(RecvResult::Status(&self.stats))
                         },
                         Err(e) => Err(e)?
                     };
@@ -206,6 +206,7 @@ impl<T> RecvBlock<T> where T: io::Write {
                     self.stats.packets_received += 1;
 
                     let total_err: u16 = (err + block_errs) as u16;
+                    self.stats.recv_bit_err += total_err as usize;
                     if header.end_flag {
                         Self::send_pending_response(packet_idx, total_err, self.fec, packet_writer)?;
                         self.waiting_for_response = true;
@@ -230,6 +231,7 @@ impl<T> RecvBlock<T> where T: io::Write {
 
                 if ack.packet_idx == self.packet_idx {
                     info!("Heard final ack, transaction complete");
+                    self.stats.recv_bit_err += err;
                     return Ok(RecvResult::Complete)
                 }
             }

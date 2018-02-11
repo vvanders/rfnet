@@ -169,6 +169,7 @@ impl<R> SendBlock<R> where R: io::Read {
             &Packet::Ack(ref ack) => {
                 if ack.packet_idx == self.packet_idx {
                     self.stats.recv_bit_err += ack.corrected_errors as usize;
+                    trace!("Err {} {}", ack.corrected_errors, self.stats.recv_bit_err);
 
                     if ack.nack {
                         trace!("Heard NACK for {}, resending", self.packet_idx);
