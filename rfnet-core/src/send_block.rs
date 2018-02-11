@@ -12,10 +12,11 @@ pub struct SendBlock<R> where R: io::Read {
     retry_attempts: usize,
     stats: SendStats,
     config: SendConfig,
-    retry_config: RetryConfig
+    retry_config: RetryConfig,
+    last_packet: Vec<u8>
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct SendStats {
     pub bytes_sent: usize,
     pub packets_sent: usize,
@@ -30,10 +31,10 @@ struct SendConfig {
 }
 
 pub struct RetryConfig {
-    delay_ms: usize,
-    bps: usize,
-    bps_scale: f32,
-    retry_attempts: usize
+    pub delay_ms: usize,
+    pub bps: usize,
+    pub bps_scale: f32,
+    pub retry_attempts: usize
 }
 
 #[derive(Debug)]
@@ -65,7 +66,6 @@ impl From<PacketEncodeError> for SendError {
 
 impl<R> SendBlock<R> where R: io::Read {
     pub fn new(data_reader: R, data_size: usize, session_id: u16, link_width: usize, fec: Option<u8>, retry_config: RetryConfig) -> SendBlock<R> {
-
         SendBlock {
             data_reader,
             session_id, 
@@ -84,7 +84,8 @@ impl<R> SendBlock<R> where R: io::Read {
                 link_width,
                 data_size
             },
-            retry_config
+            retry_config,
+            last_packet: vec!()
         }
     }
 
@@ -96,7 +97,7 @@ impl<R> SendBlock<R> where R: io::Read {
         self.config.fec = fec;
     }
 
-    fn send_data<W>(&mut self, packet_idx: u16, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<(), SendError> where W: FramedWrite {
+    fn send_data<W>(&mut self, packet_idx: u16, packet_writer: &mut W) -> Result<(), SendError> where W: FramedWrite {
         self.retry_attempts = 0;
         self.last_send = 0;
 
@@ -110,64 +111,94 @@ impl<R> SendBlock<R> where R: io::Read {
             end_flag: eof
         };
 
-        last_packet.clear();
-        let (_bytes, data_written, _eof) = encode_data(header, self.config.fec.is_some(), self.config.link_width, &mut self.data_reader, last_packet)?;
+        self.last_packet.clear();
+        let (_bytes, data_written, _eof) = encode_data(header, self.config.fec.is_some(), self.config.link_width, &mut self.data_reader, &mut self.last_packet)?;
 
-        packet_writer.write_frame(&last_packet[..])?;
+        packet_writer.write_frame(&self.last_packet[..])?;
 
         self.stats.packets_sent += 1;
+        trace!("incr2 {}", self.stats.packets_sent);
         self.stats.bytes_sent += data_written;
+
+        trace!("Sending data packet {}", packet_idx);
 
         Ok(())
     }
 
-    fn resend<W>(&mut self, last_packet: &Vec<u8>, packet_writer: &mut W) -> Result<(), SendError> where W: FramedWrite {
+    fn resend<W>(&mut self, packet_writer: &mut W) -> Result<(), SendError> where W: FramedWrite {
         self.retry_attempts += 1;
         self.stats.missed_acks += 1;
+        self.last_send = 0;
 
         if self.retry_attempts > self.retry_config.retry_attempts {
+            info!("Exceeded {} retry attempts, connection lost", self.retry_attempts);
             return Err(SendError::TimeOut)
         }
 
-        packet_writer.write_frame(&last_packet[..])?;
+        packet_writer.write_frame(&self.last_packet[..])?;
 
         self.stats.packets_sent += 1;
+        trace!("incr {}", self.stats.packets_sent);
 
         Ok(())
     }
 
-    pub fn send<W>(&mut self, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
+    fn send_ack<W>(&mut self, packet_writer: &mut W) -> Result<(), SendError> where W: FramedWrite {
+        let ack = AckPacket {
+            packet_idx: self.packet_idx,
+            nack: false,
+            pending_response: false,
+            response: false,
+            corrected_errors: 0
+        };
+
+        packet_writer.start_frame()?;
+        encode(&Packet::Ack(ack), self.config.fec.is_some(), packet_writer)?;
+        packet_writer.end_frame()?;
+
+        Ok(())
+    }
+
+    pub fn send<W>(&mut self, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
         let packet_idx = self.session_id;
-        self.send_data(packet_idx, last_packet, packet_writer)?;
+        self.send_data(packet_idx, packet_writer)?;
 
         Ok(SendResult::Status(&self.stats))
     }
 
-    pub fn on_packet<W>(&mut self, packet: &Packet, last_packet: &mut Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
+    pub fn on_packet<W>(&mut self, packet: &Packet, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
         match packet {
             &Packet::Ack(ref ack) => {
                 if ack.packet_idx == self.packet_idx {
                     self.stats.recv_bit_err += ack.corrected_errors as usize;
 
                     if ack.nack {
-                        self.resend(last_packet, packet_writer)?;
+                        trace!("Heard NACK for {}, resending", self.packet_idx);
+                        self.resend(packet_writer)?;
                     } else {
                         if ack.pending_response {
+                            trace!("Endpoint is pending response");
                             self.pending_response = true;
                             return Ok(SendResult::PendingResponse)
                         } else if self.pending_response {
+                            self.send_ack(packet_writer)?;
                             if !ack.response {
+                                info!("Transaction complete, no response");
                                 return Ok(SendResult::CompleteNoResponse)
                             } else {
+                                info!("Transaction complete, response pending");
                                 return Ok(SendResult::CompleteResponse)
                             }
                         } else {
+                            trace!("Heard ACK for {}", ack.packet_idx);
                             self.packet_idx = self.packet_idx + 1;
 
                             let packet_idx = self.packet_idx;
-                            self.send_data(packet_idx, last_packet, packet_writer)?;
+                            self.send_data(packet_idx, packet_writer)?;
                         }
                     }
+                } else {
+                    trace!("Heard ack for bad packet index {} != {}", ack.packet_idx, self.packet_idx);
                 }
             },
             _ => {}
@@ -176,12 +207,13 @@ impl<R> SendBlock<R> where R: io::Read {
         Ok(SendResult::Status(&self.stats))
     }
 
-    pub fn tick<W>(&mut self, elapsed_ms: usize, last_packet: &Vec<u8>, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
+    pub fn tick<W>(&mut self, elapsed_ms: usize, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
         self.last_send = self.last_send + elapsed_ms;
-        let next_retry = ((self.retry_config.bps * 8 * last_packet.len()) as f32 * (self.retry_config.bps_scale / 1000.0)) as usize + self.retry_config.delay_ms;
+        let next_retry = ((self.retry_config.bps * 8 * self.last_packet.len()) as f32 * (self.retry_config.bps_scale / 1000.0)) as usize + self.retry_config.delay_ms;
 
-        if self.last_send > next_retry {
-            self.resend(last_packet, packet_writer)?;
+        if self.last_send > next_retry && !self.pending_response {
+            trace!("Missed ack, resending data packet");
+            self.resend(packet_writer)?;
         }
 
         Ok(SendResult::Status(&self.stats))
@@ -202,12 +234,11 @@ mod test {
             retry_attempts: 5
         };
 
-        let mut last_packet = vec!();
         let mut output = vec!();
 
         let mut send = SendBlock::new(io::Cursor::new(&data), data.len(), 1000, 32, Some(0), retry);
 
-        match send.send(&mut last_packet, &mut output).unwrap() {
+        match send.send(&mut output).unwrap() {
             SendResult::Status(_) => {
                 let decoded = decode(&mut output[..], true).unwrap();
                 if let &(Packet::Data(ref header, payload),_) = &decoded {
@@ -235,7 +266,7 @@ mod test {
             corrected_errors: 5
         };
 
-        match send.on_packet(&Packet::Ack(ack.clone()), &mut last_packet, &mut output).unwrap() {
+        match send.on_packet(&Packet::Ack(ack.clone()), &mut output).unwrap() {
             SendResult::PendingResponse => {},
             o => panic!("{:?}", o)
         }
@@ -245,7 +276,7 @@ mod test {
         ack.pending_response = false;
         ack.response = false;
 
-        match send.on_packet(&Packet::Ack(ack), &mut last_packet, &mut output).unwrap() {
+        match send.on_packet(&Packet::Ack(ack), &mut output).unwrap() {
             SendResult::CompleteNoResponse => {},
             o => panic!("{:?}", o)
         }
@@ -261,18 +292,17 @@ mod test {
             retry_attempts: 5
         };
 
-        let mut last_packet = vec!();
         let mut output = vec!();
 
         let mut send = SendBlock::new(io::Cursor::new(&data), data.len(), 1000, 32, Some(0), retry);
-        send.send(&mut last_packet, &mut output).unwrap();
+        send.send(&mut output).unwrap();
 
         let expected_resend = (output.len() * 8 * 1000) / 1200;
 
         for i in 0..5 {
             output.clear();
 
-            send.tick(expected_resend * 2, &mut last_packet, &mut output).unwrap();
+            send.tick(expected_resend * 2, &mut output).unwrap();
 
             assert_eq!(send.get_stats().missed_acks, i+1);
             match decode(&mut output[..], true).unwrap() {
@@ -281,7 +311,7 @@ mod test {
             }
         }
 
-        match send.tick(expected_resend * 2, &mut last_packet, &mut output) {
+        match send.tick(expected_resend * 2, &mut output) {
             Err(SendError::TimeOut) => {},
             o => panic!("{:?}", o)
         }
@@ -299,7 +329,6 @@ mod test {
             retry_attempts: 5
         };
 
-        let mut last_packet = vec!();
         let mut output = vec!();
         let mut final_data = vec!();
 
@@ -309,7 +338,7 @@ mod test {
 
         let mut send = SendBlock::new(io::Cursor::new(&data), data.len(), 1000, link_width, fec, retry);
 
-        match send.send(&mut last_packet, &mut output).unwrap() {
+        match send.send(&mut output).unwrap() {
             SendResult::Status(_) => {},
             o => panic!("{:?}", o)
         }
@@ -366,7 +395,7 @@ mod test {
             output.clear();
 
             {
-                let result = send.on_packet(&ack_packet(i as u16, 5, is_end), &mut last_packet, &mut output).unwrap();
+                let result = send.on_packet(&ack_packet(i as u16, 5, is_end), &mut output).unwrap();
                 if is_end {
                     match result {
                         SendResult::PendingResponse => {},
@@ -391,7 +420,7 @@ mod test {
                 corrected_errors: 0
             });
 
-        match send.on_packet(&final_ack, &mut last_packet, &mut output).unwrap() {
+        match send.on_packet(&final_ack, &mut output).unwrap() {
             SendResult::CompleteNoResponse => {},
             o => panic!("{:?}", o)
         }

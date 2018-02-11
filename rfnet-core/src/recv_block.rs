@@ -16,7 +16,7 @@ pub struct RecvBlock<T> where T: io::Write {
     decode_block: Vec<u8>
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct RecvStats {
     pub recv_bytes: usize,
     pub recv_bit_err: usize,
@@ -91,6 +91,10 @@ impl<T> RecvBlock<T> where T: io::Write {
         }
     }
 
+    pub fn get_stats(&self) -> &RecvStats {
+        &self.stats
+    }
+
     fn send_nack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx,
@@ -103,6 +107,8 @@ impl<T> RecvBlock<T> where T: io::Write {
         packet_writer.start_frame()?;
         encode(&packet, fec, packet_writer).map(|_| ())?;
         packet_writer.end_frame()?;
+
+        trace!("Send NACK {}", packet_idx);
 
         Ok(())
     }
@@ -120,6 +126,8 @@ impl<T> RecvBlock<T> where T: io::Write {
         encode(&packet, fec, packet_writer).map(|_| ())?;
         packet_writer.end_frame()?;
 
+        trace!("Send ACK {}", packet_idx);
+
         Ok(())
     }
 
@@ -136,6 +144,8 @@ impl<T> RecvBlock<T> where T: io::Write {
         encode(&packet, fec, packet_writer).map(|_| ())?;
         packet_writer.end_frame()?;
 
+        trace!("Send Pending Response {}", packet_idx);
+
         Ok(())
     }
 
@@ -151,6 +161,8 @@ impl<T> RecvBlock<T> where T: io::Write {
         packet_writer.start_frame()?;
         encode(&packet, fec, packet_writer).map(|_| ())?;
         packet_writer.end_frame()?;
+
+        trace!("Send Response {} {}", packet_idx, response.unwrap());
 
         Ok(())
     }
@@ -184,7 +196,10 @@ impl<T> RecvBlock<T> where T: io::Write {
                         Err(e) => Err(e)?
                     };
 
+                    trace!("Received data packet {} of {} bytes with {} FEC", header.packet_idx, self.decode_block.len(), header.fec_bytes);
+
                     self.data_output.write(&self.decode_block[..])?;
+                    self.stats.packets_received += 1;
 
                     let total_err: u16 = (err + block_errs) as u16;
                     if header.end_flag {
@@ -210,7 +225,10 @@ impl<T> RecvBlock<T> where T: io::Write {
                     return Err(RecvError::NotResponding)
                 }
 
-                return Ok(RecvResult::Complete)
+                if ack.packet_idx == self.packet_idx {
+                    info!("Heard final ack, transaction complete");
+                    return Ok(RecvResult::Complete)
+                }
             }
             _ => {}
         }
@@ -225,18 +243,22 @@ impl<T> RecvBlock<T> where T: io::Write {
         if self.waiting_for_response {
             if self.last_sent >= PENDING_REPEAT_MS {
                 if self.response.is_none() {
+                    trace!("Pending Response timeout");
                     Self::send_pending_response(self.packet_idx, 0, self.fec, packet_writer)?;
                 } else {
                     if self.last_heard >= TIMEOUT_MS {
+                        info!("No ack heard, terminating connection");
                         return Err(RecvError::TimedOut)
                     }
 
+                    trace!("Response timeout");
                     Self::send_response_result(self.response, self.packet_idx, self.fec, packet_writer)?;
                 }
                 self.last_sent = 0;
             }
         } else {
             if self.last_heard >= TIMEOUT_MS {
+                info!("No data heard, terminating connection");
                 return Err(RecvError::TimedOut)
             }
         }
@@ -253,6 +275,8 @@ impl<T> RecvBlock<T> where T: io::Write {
         self.last_heard = 0;
 
         Self::send_response_result(self.response, self.packet_idx, self.fec, packet_writer)?;
+
+        info!("Sending has response {}", is_response);
 
         Ok(RecvResult::CompleteSendResponse)
     }

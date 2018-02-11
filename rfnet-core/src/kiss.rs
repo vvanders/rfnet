@@ -38,8 +38,6 @@ pub const CMD_RETURN: u8 = 0xFF;
 /// Encodes a series of bytes into a KISS frame.
 #[allow(dead_code)]
 pub fn encode<R,W>(mut data: R, mut encoded: W, port: u8) -> io::Result<usize> where R: io::Read, W: io::Write {
-    trace!("Encoding KISS frame for port {}", port);
-
     let mut written: usize = 0;
 
     //Data frame command, port is high part of the nibble
