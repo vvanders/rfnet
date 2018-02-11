@@ -117,7 +117,6 @@ impl<R> SendBlock<R> where R: io::Read {
         packet_writer.write_frame(&self.last_packet[..])?;
 
         self.stats.packets_sent += 1;
-        trace!("incr2 {}", self.stats.packets_sent);
         self.stats.bytes_sent += data_written;
 
         trace!("Sending data packet {}", packet_idx);
@@ -138,7 +137,6 @@ impl<R> SendBlock<R> where R: io::Read {
         packet_writer.write_frame(&self.last_packet[..])?;
 
         self.stats.packets_sent += 1;
-        trace!("incr {}", self.stats.packets_sent);
 
         Ok(())
     }

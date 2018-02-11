@@ -198,7 +198,11 @@ impl<T> RecvBlock<T> where T: io::Write {
 
                     trace!("Received data packet {} of {} bytes with {} FEC", header.packet_idx, self.decode_block.len(), header.fec_bytes);
 
-                    self.data_output.write(&self.decode_block[..])?;
+                    if self.waiting_for_response {
+                        trace!("Already heard this packet and waiting for response ack, discarding");
+                    } else {
+                        self.data_output.write(&self.decode_block[..])?;
+                    }
                     self.stats.packets_received += 1;
 
                     let total_err: u16 = (err + block_errs) as u16;
@@ -211,7 +215,6 @@ impl<T> RecvBlock<T> where T: io::Write {
                         Self::send_ack(packet_idx, total_err, self.fec, packet_writer)?;
                         self.packet_idx += 1;
                     }
-
                 } else if packet_idx < self.packet_idx {
                     self.last_heard = 0;
                     self.last_sent = 0;

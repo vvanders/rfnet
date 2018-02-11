@@ -9,7 +9,7 @@ use std::io;
 fn cycle_recv<'a,W,F>(recv: &'a mut RecvBlock<W>, send_channel: &mut F, recv_channel: &mut Vec<u8>) -> Option<RecvResult<'a>>
     where W: io::Write, F: FramedWrite {
 
-    recv.tick(50, send_channel).unwrap();
+    recv.tick(100, send_channel).unwrap();
 
     if recv_channel.len() > 0 {
         let mut data = vec!();
@@ -34,7 +34,7 @@ fn cycle_recv<'a,W,F>(recv: &'a mut RecvBlock<W>, send_channel: &mut F, recv_cha
 fn cycle_send<'a,W,F>(send: &'a mut SendBlock<W>, send_channel: &mut Vec<u8>, recv_channel: &mut F) -> Option<SendResult<'a>>
     where W: io::Read, F: FramedWrite {
 
-    send.tick(50, recv_channel).unwrap();
+    send.tick(100, recv_channel).unwrap();
 
     if send_channel.len() > 0 {
         let mut data = vec!();
@@ -72,6 +72,19 @@ fn send_send_alt() {
     assert_eq!(send.packets_sent*2, send_alt.packets_sent);
     assert_eq!(recv.acks_sent*2, recv_alt.acks_sent);
     assert_eq!(recv_alt.packets_received, send_alt.packets_sent/2);
+}
+
+#[test]
+fn send_recv_alt() {
+    use simple_logger;
+    simple_logger::init();
+
+    let (send,recv) = cycle_data(|idx, sidx| false, |idx, ridx| false);
+    let (send_alt,recv_alt) = cycle_data(|idx, sidx| false, |idx, ridx| ridx % 2 == 1);
+
+    assert_eq!(send.packets_sent*2, send_alt.packets_sent);
+    assert_eq!(recv.acks_sent*2, recv_alt.acks_sent);
+    assert_eq!(recv_alt.packets_received-1, send_alt.packets_sent/2);
 }
 
 fn cycle_data<S,R>(drop_send_fn: S, drop_recv_fn: R) -> (SendStats, RecvStats)
@@ -113,6 +126,7 @@ fn cycle_data<S,R>(drop_send_fn: S, drop_recv_fn: R) -> (SendStats, RecvStats)
                 send_idx += 1;
 
                 if drop_send_fn(i, send_idx) {
+                    trace!("Discarding send packet {}", recv_idx);
                     recv_chan.clear();
                 }
             }
@@ -122,7 +136,6 @@ fn cycle_data<S,R>(drop_send_fn: S, drop_recv_fn: R) -> (SendStats, RecvStats)
                 Some(RecvResult::CompleteSendResponse) => {
                     recv.send_response(false, &mut KISSFramedWrite::new(&mut send_chan, 0)).unwrap();
                 },
-                Some(RecvResult::Status(_)) => recv_idx += 1,
                 _ => {}
             }
 
@@ -130,6 +143,7 @@ fn cycle_data<S,R>(drop_send_fn: S, drop_recv_fn: R) -> (SendStats, RecvStats)
                 recv_idx += 1;
 
                 if drop_recv_fn(i, recv_idx) {
+                    trace!("Discarding recv packet {}", recv_idx);
                     send_chan.clear();
                 }
             }
