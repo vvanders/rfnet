@@ -129,9 +129,6 @@ fn send_flip() {
 
 #[test]
 fn recv_flip() {
-    use simple_logger;
-    simple_logger::init();
-
     let mut errs = 0;
     let (send,recv) = {
         let errs_ref = &mut errs;
@@ -157,8 +154,6 @@ fn recv_flip() {
     assert_eq!(send.recv_bit_err, 0);
     assert_eq!(recv.recv_bit_err, 0);
 }
-
-
 
 fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R) -> (SendStats, RecvStats)
         where S: FnMut(usize, usize, &mut Vec<u8>), R: FnMut(usize, usize, &mut Vec<u8>) {
