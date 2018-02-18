@@ -62,7 +62,7 @@ impl<'a,W,R,T> Node<'a,W,R,T> where W: io::Write, W: 'a, R: io::Write, R: 'a, T:
         &self.link_info
     }
 
-    pub fn send_request(&mut self, request_reader: T) -> Result<u16, PacketEncodeError> {
+    pub fn send_request(&mut self, request_reader: T) -> io::Result<u16> {
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id + 1;
 
@@ -72,7 +72,7 @@ impl<'a,W,R,T> Node<'a,W,R,T> where W: io::Write, W: 'a, R: io::Write, R: 'a, T:
         self.connect().map(|_| request_id)
     }
 
-    fn connect(&mut self) -> Result<(), PacketEncodeError> {
+    fn connect(&mut self) -> io::Result<()> {
         if let State::Idle = self.state {
             self.state = State::Negotiating(AckedPacket::new(NEGOTIATE_RETRY));
             self.last_packet.clear();

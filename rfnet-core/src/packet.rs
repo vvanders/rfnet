@@ -1,4 +1,5 @@
 use std::io::{Cursor, Write, Read};
+use std::io;
 
 use reed_solomon;
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
@@ -69,18 +70,6 @@ pub enum DataDecodeError {
     TooManyFECErrors
 }
 
-#[derive(Debug)]
-pub enum PacketEncodeError {
-    Io(::std::io::Error),
-    BadFormat
-}
-
-impl From<::std::io::Error> for PacketEncodeError {
-    fn from(err: ::std::io::Error) -> Self {
-        PacketEncodeError::Io(err)
-    }
-}
-
 pub fn decode<'a>(data: &'a mut [u8], fec_enabled: bool) -> Result<(Packet<'a>, usize), PacketDecodeError> {
     if fec_enabled {
         decode_fec(data)
@@ -108,7 +97,7 @@ pub fn decode_data_blocks<T>(header: &DataPacket, data: &[u8], fec: bool, out: &
     Ok(acc_err)
 }
 
-pub fn encode<'a,T>(packet: &Packet<'a>, fec_enabled: bool, writer: &mut T) -> Result<usize, PacketEncodeError> where T: Write {
+pub fn encode<'a,T>(packet: &Packet<'a>, fec_enabled: bool, writer: &mut T) -> io::Result<usize> where T: Write {
     if fec_enabled {
         encode_fec(packet, writer)
     } else {
@@ -116,7 +105,7 @@ pub fn encode<'a,T>(packet: &Packet<'a>, fec_enabled: bool, writer: &mut T) -> R
     }
 }
 
-pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: usize, data: &mut R, writer: &mut W) -> Result<(usize, usize, bool), PacketEncodeError> where W: Write, R: Read {
+pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: usize, data: &mut R, writer: &mut W) -> io::Result<(usize, usize, bool)> where W: Write, R: Read {
     let (header_size, fec_bytes) = if fec {
         (3 + FEC_CRC_BYTES, get_fec_bytes(header.fec_bytes))
     } else {
@@ -231,7 +220,7 @@ fn get_fec_bytes(fec_count: u8) -> usize {
     (fec_count+1) as usize * 2
 }
 
-fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, PacketEncodeError> where T: Write {
+fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> io::Result<usize> where T: Write {
     match packet {
         &Packet::Data(ref header, ref content) => {
             panic!("Data should be encoded with encode_data");
@@ -266,7 +255,7 @@ fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Packet
     }
 }
 
-fn encode_non_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, PacketEncodeError> where T: Write {
+fn encode_non_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> io::Result<usize> where T: Write {
     match packet {
         &Packet::Data(ref _header, ref payload) => {
             let len = encode_inner(packet, writer)?;
@@ -278,7 +267,7 @@ fn encode_non_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, Pa
     }
 }
 
-fn encode_inner<'a,T>(packet: &Packet<'a>, writer: &mut T) -> Result<usize, PacketEncodeError> where T: Write {
+fn encode_inner<'a,T>(packet: &Packet<'a>, writer: &mut T) -> io::Result<usize> where T: Write {
     match packet {
         &Packet::Ack(ref header) => {
             let mut seq_id = header.packet_idx & ((!DATA_MASK as u16) << 8 | 0xFF);

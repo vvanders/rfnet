@@ -3,7 +3,7 @@ use framed::FramedWrite;
 
 use std::io;
 
-pub struct RecvBlock<T> where T: io::Write {
+pub struct RecvBlock {
     session_id: u16,
     fec: bool,
     packet_idx: u16,
@@ -11,7 +11,6 @@ pub struct RecvBlock<T> where T: io::Write {
     last_sent: usize,
     waiting_for_response: bool,
     response: Option<bool>,
-    data_output: T,
     stats: RecvStats,
     decode_block: Vec<u8>
 }
@@ -35,7 +34,6 @@ pub enum RecvResult<'a> {
 pub enum RecvError {
     Io(io::Error),
     Decode(PacketDecodeError),
-    Encode(PacketEncodeError),
     NotResponding,
     TimedOut
 }
@@ -43,12 +41,6 @@ pub enum RecvError {
 impl From<PacketDecodeError> for RecvError {
     fn from(err: PacketDecodeError) -> RecvError {
         RecvError::Decode(err)
-    }
-}
-
-impl From<PacketEncodeError> for RecvError {
-    fn from(err: PacketEncodeError) -> RecvError {
-        RecvError::Encode(err)
     }
 }
 
@@ -70,8 +62,8 @@ impl From<io::Error> for RecvError {
 const TIMEOUT_MS: usize = 10_000;
 const PENDING_REPEAT_MS: usize = 500;
 
-impl<T> RecvBlock<T> where T: io::Write {
-    pub fn new(session_id: u16, fec: bool, data_output: T) -> RecvBlock<T> {
+impl RecvBlock {
+    pub fn new(session_id: u16, fec: bool) -> RecvBlock {
         RecvBlock {
             session_id,
             fec,
@@ -80,7 +72,6 @@ impl<T> RecvBlock<T> where T: io::Write {
             last_sent: 0,
             waiting_for_response: false,
             response: None,
-            data_output,
             stats: RecvStats {
                 recv_bytes: 0,
                 recv_bit_err: 0,
@@ -93,6 +84,10 @@ impl<T> RecvBlock<T> where T: io::Write {
 
     pub fn get_stats(&self) -> &RecvStats {
         &self.stats
+    }
+
+    pub fn get_session_id(&self) -> u16 {
+        self.session_id
     }
 
     fn send_nack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
@@ -167,7 +162,8 @@ impl<T> RecvBlock<T> where T: io::Write {
         Ok(())
     }
 
-    pub fn on_packet<W>(&mut self, &(ref packet, err): &(Packet, usize), packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: FramedWrite {
+    pub fn on_packet<F,W>(&mut self, &(ref packet, err): &(Packet, usize), packet_writer: &mut F, data_output: &mut W) -> Result<RecvResult, RecvError> 
+            where F: FramedWrite, W: io::Write {
         match packet {
             &Packet::Data(ref header, payload) => {
                 let packet_idx = if header.start_flag {
@@ -201,7 +197,7 @@ impl<T> RecvBlock<T> where T: io::Write {
                     if self.waiting_for_response {
                         trace!("Already heard this packet and waiting for response ack, discarding");
                     } else {
-                        self.data_output.write(&self.decode_block[..])?;
+                        data_output.write(&self.decode_block[..])?;
                     }
                     self.stats.packets_received += 1;
 
@@ -305,15 +301,15 @@ mod test {
         (decode(packet_holder, true).unwrap().0, err)
     }
 
-    fn send_to_response<'a>(recv_data: &'a mut Vec<u8>) -> RecvBlock<&'a mut Vec<u8>> {
+    fn send_to_response<'a>(recv_data: &'a mut Vec<u8>) -> RecvBlock {
         let payload = get_payload();
 
-        let mut recv = RecvBlock::new(1000, true, recv_data);
+        let mut recv = RecvBlock::new(1000, true);
 
         let mut output = vec!();
         let mut data_packet = vec!();
 
-        match recv.on_packet(&gen_data(1000, true, false, &payload[..], 5, &mut data_packet), &mut output) {
+        match recv.on_packet(&gen_data(1000, true, false, &payload[..], 5, &mut data_packet), &mut output, recv_data) {
             Ok(RecvResult::Status(_)) => {},
             o => panic!("{:?}", o)
         }
@@ -330,7 +326,7 @@ mod test {
 
         output.clear();
 
-        match recv.on_packet(&gen_data(1, false, true, &payload[..], 5, &mut data_packet), &mut output) {
+        match recv.on_packet(&gen_data(1, false, true, &payload[..], 5, &mut data_packet), &mut output, recv_data) {
             Ok(RecvResult::CompleteSendResponse) => {},
             o => panic!("{:?}", o)
         }
@@ -380,7 +376,7 @@ mod test {
                 nack: false
             };
 
-            match recv.on_packet(&(Packet::Ack(response_ack),0), &mut output) {
+            match recv.on_packet(&(Packet::Ack(response_ack),0), &mut output, &mut recv_data) {
                 Ok(RecvResult::Complete) => {},
                 o => panic!("{:?}", o)
             }
@@ -395,8 +391,7 @@ mod test {
 
     #[test]
     fn test_timeout() {
-        let mut data = vec!();
-        let mut recv = RecvBlock::new(1000, true, &mut data);
+        let mut recv = RecvBlock::new(1000, true);
         let mut output = vec!();
 
         match recv.tick(10, &mut output) {
@@ -512,7 +507,7 @@ mod test {
         let payload = get_payload();
 
         {
-            let mut recv = RecvBlock::new(1000, true, &mut recv_data);
+            let mut recv = RecvBlock::new(1000, true);
 
             let mut output = vec!();
             let mut data_packet = vec!();
@@ -533,8 +528,8 @@ mod test {
 
             let decoded = decode(&mut data_packet, true).unwrap();
 
-            match recv.on_packet(&decoded, &mut output) {
-                Err(RecvError::Decode(PacketDecodeError::TooManyFECErrors)) => {},
+            match recv.on_packet(&decoded, &mut output, &mut recv_data) {
+                Ok(RecvResult::Status(_)) => {},
                 o => panic!("{:?}", o)
             }
 
@@ -558,13 +553,13 @@ mod test {
         let payload = get_payload();
 
         {
-            let mut recv = RecvBlock::new(1000, true, &mut recv_data);
+            let mut recv = RecvBlock::new(1000, true);
 
             let mut output = vec!();
             let mut data_packet = vec!();
             let mut send_packet = &gen_data(1000, true, false, &payload[..], 5, &mut data_packet);
 
-            match recv.on_packet(send_packet, &mut output) {
+            match recv.on_packet(send_packet, &mut output, &mut recv_data) {
                 Ok(RecvResult::Status(_)) => {},
                 o => panic!("{:?}", o)
             }
@@ -581,7 +576,7 @@ mod test {
 
             output.clear();
 
-            match recv.on_packet(send_packet, &mut output) {
+            match recv.on_packet(send_packet, &mut output, &mut recv_data) {
                 Ok(RecvResult::Status(_)) => {},
                 o => panic!("{:?}", o)
             }

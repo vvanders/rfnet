@@ -3,8 +3,7 @@ use framed::FramedWrite;
 
 use std::io;
 
-pub struct SendBlock<R> where R: io::Read {
-    data_reader: R,
+pub struct SendBlock {
     session_id: u16,
     packet_idx: u16,
     pending_response: bool,
@@ -48,7 +47,6 @@ pub enum SendResult<'a> {
 #[derive(Debug)]
 pub enum SendError {
     Io(io::Error),
-    Encode(PacketEncodeError),
     TimeOut
 }
 
@@ -58,16 +56,9 @@ impl From<io::Error> for SendError {
     }
 }
 
-impl From<PacketEncodeError> for SendError {
-    fn from(err: PacketEncodeError) -> SendError {
-        SendError::Encode(err)
-    }
-}
-
-impl<R> SendBlock<R> where R: io::Read {
-    pub fn new(data_reader: R, data_size: usize, session_id: u16, link_width: usize, fec: Option<u8>, retry_config: RetryConfig) -> SendBlock<R> {
+impl SendBlock {
+    pub fn new(data_size: usize, session_id: u16, link_width: usize, fec: Option<u8>, retry_config: RetryConfig) -> SendBlock {
         SendBlock {
-            data_reader,
             session_id, 
             packet_idx: 0,
             pending_response: false,
@@ -97,7 +88,8 @@ impl<R> SendBlock<R> where R: io::Read {
         self.config.fec = fec;
     }
 
-    fn send_data<W>(&mut self, packet_idx: u16, packet_writer: &mut W) -> Result<(), SendError> where W: FramedWrite {
+    fn send_data<W,R>(&mut self, packet_idx: u16, packet_writer: &mut W, data_reader: &mut R) -> Result<(), SendError>
+            where W: FramedWrite, R: io::Read {
         self.retry_attempts = 0;
         self.last_send = 0;
 
@@ -112,7 +104,7 @@ impl<R> SendBlock<R> where R: io::Read {
         };
 
         self.last_packet.clear();
-        let (_bytes, data_written, _eof) = encode_data(header, self.config.fec.is_some(), self.config.link_width, &mut self.data_reader, &mut self.last_packet)?;
+        let (_bytes, data_written, _eof) = encode_data(header, self.config.fec.is_some(), self.config.link_width, data_reader, &mut self.last_packet)?;
 
         packet_writer.write_frame(&self.last_packet[..])?;
 
@@ -157,14 +149,15 @@ impl<R> SendBlock<R> where R: io::Read {
         Ok(())
     }
 
-    pub fn send<W>(&mut self, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
+    pub fn send<W,R>(&mut self, packet_writer: &mut W, data_reader: &mut R) -> Result<SendResult, SendError> where W: FramedWrite, R: io::Read {
         let packet_idx = self.session_id;
-        self.send_data(packet_idx, packet_writer)?;
+        self.send_data(packet_idx, packet_writer, data_reader)?;
 
         Ok(SendResult::Status(&self.stats))
     }
 
-    pub fn on_packet<W>(&mut self, packet: &Packet, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
+    pub fn on_packet<W,R>(&mut self, packet: &Packet, packet_writer: &mut W, data_reader: &mut R) -> Result<SendResult, SendError>
+            where W: FramedWrite, R: io::Read {
         match packet {
             &Packet::Ack(ref ack) => {
                 if ack.packet_idx == self.packet_idx {
@@ -193,7 +186,7 @@ impl<R> SendBlock<R> where R: io::Read {
                             self.packet_idx = self.packet_idx + 1;
 
                             let packet_idx = self.packet_idx;
-                            self.send_data(packet_idx, packet_writer)?;
+                            self.send_data(packet_idx, packet_writer, data_reader)?;
                         }
                     }
                 } else {
@@ -235,9 +228,10 @@ mod test {
 
         let mut output = vec!();
 
-        let mut send = SendBlock::new(io::Cursor::new(&data), data.len(), 1000, 32, Some(0), retry);
+        let mut data_reader = io::Cursor::new(&data);
+        let mut send = SendBlock::new(data.len(), 1000, 32, Some(0), retry);
 
-        match send.send(&mut output).unwrap() {
+        match send.send(&mut output, &mut data_reader).unwrap() {
             SendResult::Status(_) => {
                 let decoded = decode(&mut output[..], true).unwrap();
                 if let &(Packet::Data(ref header, payload),_) = &decoded {
@@ -265,7 +259,7 @@ mod test {
             corrected_errors: 5
         };
 
-        match send.on_packet(&Packet::Ack(ack.clone()), &mut output).unwrap() {
+        match send.on_packet(&Packet::Ack(ack.clone()), &mut output, &mut data_reader).unwrap() {
             SendResult::PendingResponse => {},
             o => panic!("{:?}", o)
         }
@@ -275,7 +269,7 @@ mod test {
         ack.pending_response = false;
         ack.response = false;
 
-        match send.on_packet(&Packet::Ack(ack), &mut output).unwrap() {
+        match send.on_packet(&Packet::Ack(ack), &mut output, &mut data_reader).unwrap() {
             SendResult::CompleteNoResponse => {},
             o => panic!("{:?}", o)
         }
@@ -293,8 +287,9 @@ mod test {
 
         let mut output = vec!();
 
-        let mut send = SendBlock::new(io::Cursor::new(&data), data.len(), 1000, 32, Some(0), retry);
-        send.send(&mut output).unwrap();
+        let mut data_reader = io::Cursor::new(&data);
+        let mut send = SendBlock::new(data.len(), 1000, 32, Some(0), retry);
+        send.send(&mut output, &mut data_reader).unwrap();
 
         let expected_resend = (output.len() * 8 * 1000) / 1200;
 
@@ -335,9 +330,10 @@ mod test {
         let fec = Some(0);
         let bytes_per_packet = data_bytes_per_packet(fec, link_width);
 
-        let mut send = SendBlock::new(io::Cursor::new(&data), data.len(), 1000, link_width, fec, retry);
+        let mut data_reader = io::Cursor::new(&data);
+        let mut send = SendBlock::new(data.len(), 1000, link_width, fec, retry);
 
-        match send.send(&mut output).unwrap() {
+        match send.send(&mut output, &mut data_reader).unwrap() {
             SendResult::Status(_) => {},
             o => panic!("{:?}", o)
         }
@@ -394,7 +390,7 @@ mod test {
             output.clear();
 
             {
-                let result = send.on_packet(&ack_packet(i as u16, 5, is_end), &mut output).unwrap();
+                let result = send.on_packet(&ack_packet(i as u16, 5, is_end), &mut output, &mut data_reader).unwrap();
                 if is_end {
                     match result {
                         SendResult::PendingResponse => {},
@@ -419,7 +415,7 @@ mod test {
                 corrected_errors: 0
             });
 
-        match send.on_packet(&final_ack, &mut output).unwrap() {
+        match send.on_packet(&final_ack, &mut output, &mut data_reader).unwrap() {
             SendResult::CompleteNoResponse => {},
             o => panic!("{:?}", o)
         }

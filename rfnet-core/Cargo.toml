@@ -7,6 +7,8 @@ authors = ["Val Vanderschaegen <valere.vanderschaegen@gmail.com>"]
 log = "0.4.1"
 byteorder = "1.2.1"
 reed-solomon = "0.2.1"
+hyper = "0.11.18"
+rand = "0.4.2"
 
 [dev-dependencies]
 simple_logger = "*"
