@@ -8,6 +8,7 @@ log = "0.4.1"
 byteorder = "1.2.1"
 reed-solomon = "0.2.1"
 hyper = "0.11.18"
+futures = "0.1.17"
 rand = "0.4.2"
 
 [dev-dependencies]

@@ -3,6 +3,7 @@ extern crate log;
 extern crate reed_solomon;
 extern crate byteorder;
 extern crate hyper;
+extern crate futures;
 extern crate rand;
 
 #[cfg(test)]

@@ -2,13 +2,13 @@ use packet::*;
 use framed::FramedWrite;
 use send_block::{SendBlock, SendResult, SendError, RetryConfig};
 use recv_block::{RecvBlock, RecvResult, RecvError};
+use message;
 
 use std::io;
 use hyper;
 use rand;
 
 //@todo suspend
-//@todo pubkey
 //@todo http req
 
 pub struct Link {
@@ -25,7 +25,7 @@ pub struct LinkConfig {
 }
 
 pub trait HttpProvider {
-    fn request(request: hyper::Request) -> Result<hyper::Response, hyper::Error>;
+    fn request(&mut self, request: hyper::Request) -> Result<hyper::Response, hyper::Error>;
 }
 
 enum InnerState {
@@ -88,7 +88,7 @@ impl Link {
                 Some(InnerState::Connected { remote: callsign, session_id, idle: 0})
             },
             Err(e) => {
-                info!("Failed to read callsign, invalid UTF8 {:?}", callsign);
+                info!("Failed to read callsign, invalid UTF8 {:?} {:?}", callsign, e);
                 None
             }
         };
@@ -96,8 +96,83 @@ impl Link {
         Ok(res)
     }
 
-    fn handle_response<H>(request: &Vec<u8>, http: &mut H) -> Option<Vec<u8>> where H: HttpProvider {
-        None
+    fn build_request(msg: message::RequestMessage) -> Result<hyper::Request, String> {
+        match msg.req_type {
+            message::RequestType::REST { method, url, headers, body } => {
+                let method = match method {
+                    message::RESTMethod::GET => hyper::Method::Get,
+                    message::RESTMethod::PUT => hyper::Method::Put,
+                    message::RESTMethod::POST => hyper::Method::Post,
+                    message::RESTMethod::PATCH => hyper::Method::Patch,
+                    message::RESTMethod::DELETE => hyper::Method::Delete
+                };
+
+                use std::str::FromStr;
+                let url = hyper::Uri::from_str(url)
+                    .map_err(|e| format!("Unable to parse url {:?}", e))?;
+
+                let mut req = hyper::Request::new(method, url);
+
+                req.headers_mut().append_raw("rfnet-signature", msg.signature);
+
+                //@todo parse + set headers
+
+                req.set_body(body.to_string());
+
+                Ok(req)
+            },
+            _ => Err("Unsupported request".to_string())
+        }
+    }
+
+    fn encode_response(session_id: u16, code: u16, body: &str) -> Option<Vec<u8>> {
+        let response = message::ResponseMessage {
+            sequence_id: session_id,
+            resp_type: message::ResponseType::REST {
+                code,
+                body
+            }
+        };
+
+        let mut encoded = vec!();
+        match message::encode_response_message(&response, &mut encoded) {
+            Ok(()) => Some(encoded),
+            Err(e) => {
+                info!("Failed to encode response {:?}", e);
+                None
+            }
+        }
+    }
+
+    fn handle_response<H>(request: &Vec<u8>, session_id: u16, http: &mut H) -> Option<Vec<u8>> where H: HttpProvider {
+        match message::decode_request_message(request) {
+            Ok(msg) => {
+                match Self::build_request(msg) {
+                    Ok(request) => {
+                        match http.request(request) {
+                            Ok(resp) => {
+                                let code = resp.status().as_u16();
+
+                                use futures::stream::Stream;
+                                use futures::Future;
+                                let body = resp.body().concat2().wait();
+
+                                match body {
+                                    Ok(body) => match ::std::str::from_utf8(body.as_ref()) {
+                                        Ok(body) => Self::encode_response(session_id, code, body),
+                                        Err(e) => Self::encode_response(session_id, code, format!("Unable to decode UTF response {:?}", e).as_str())
+                                    }
+                                    Err(e) => Self::encode_response(session_id, 500, format!("Error during http request {:?}", e).as_str())
+                                }
+                            },
+                            Err(e) => Self::encode_response(session_id, 500, format!("Unable to issue http request {:?}", e).as_str())
+                        }
+                    },
+                    Err(e) => Self::encode_response(session_id, 500, e.as_str())
+                }
+            },
+            Err(e) => Self::encode_response(session_id, 500, "Error when decoding message")
+        }
     }
 
     pub fn recv_data<W,H>(&mut self, data: &mut [u8], packet_writer: &mut W, http: &mut H) -> io::Result<()> where W: FramedWrite, H: HttpProvider {
@@ -113,15 +188,19 @@ impl Link {
             &mut InnerState::Idle => {
                 match &packet {
                     &Packet::Control(ref ctrl) => {
-                        match ctrl.ctrl_type {
-                            ControlType::LinkRequest => {
-                                let session_id = rand::random::<u16>();
-                                Self::connect(&self.callsign, ctrl.source_callsign, session_id, self.config.fec, packet_writer)?
-                            },
-                            _ => {
-                                trace!("Unexpected control packet during Idle {:?}", ctrl);
-                                None
+                        if ctrl.dest_callsign == self.callsign.as_bytes() {
+                            match ctrl.ctrl_type {
+                                ControlType::LinkRequest => {
+                                    let session_id = rand::random::<u16>();
+                                    Self::connect(&self.callsign, ctrl.source_callsign, session_id, self.config.fec, packet_writer)?
+                                },
+                                _ => {
+                                    trace!("Unexpected control packet during Idle {:?}", ctrl);
+                                    None
+                                }
                             }
+                        } else {
+                            None
                         }
                     },
                     p => {
@@ -137,8 +216,6 @@ impl Link {
                     false
                 };
 
-                //handle cmd
-
                 if start_data {
                     let recv = RecvBlock::new(session_id, self.config.fec);
                     Some(InnerState::Request {
@@ -148,12 +225,23 @@ impl Link {
                     })
                 } else {
                     if let &Packet::Control(ref header) = &packet {
-                        match header.ctrl_type {
-                            ControlType::LinkClose => {
-                                Self::send_disconnect(&self.callsign, remote, self.config.fec, packet_writer)?;
-                                Some(InnerState::Idle)
-                            },
-                            _ => None
+                        if header.source_callsign == remote.as_bytes() && header.dest_callsign == self.callsign.as_bytes() {
+                            match header.ctrl_type {
+                                ControlType::LinkClose => {
+                                    Self::send_disconnect(&self.callsign, remote, self.config.fec, packet_writer)?;
+                                    Some(InnerState::Idle)
+                                },
+                                ControlType::LinkRequest => {
+                                    //If we missed ack, resend it
+                                    Self::send_link_established(&self.callsign, remote, session_id, self.config.fec, packet_writer)?;
+
+                                    None
+                                }
+                                _ => None
+                            }
+                        } else {
+                            trace!("Control packet with wrong callsign {:?} -> {:?}", header.source_callsign, header.dest_callsign);
+                            None
                         }
                     } else {
                         None
@@ -180,7 +268,7 @@ impl Link {
                             }
                         },
                         Ok(RecvResult::CompleteSendResponse) => {
-                            if let Some(response) = Self::handle_response(request, http) {
+                            if let Some(response) = Self::handle_response(request, recv.get_session_id(), http) {
                                 let retry_config = RetryConfig {
                                     delay_ms: 0,
                                     bps: 1200,

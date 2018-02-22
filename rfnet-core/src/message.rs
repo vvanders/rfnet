@@ -2,28 +2,47 @@ use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
 use std::io;
 
-#[derive(PartialEq, Debug)]
-pub enum MessageType {
+enum MessageType {
     Reserved,
     REST,
     Raw
 }
 
+#[derive(PartialEq, Debug, Clone)]
+pub enum RESTMethod {
+    GET,
+    PUT,
+    PATCH,
+    POST,
+    DELETE
+}
+
+#[derive(PartialEq, Debug)]
+pub enum RequestType<'a> {
+    Reserved,
+    REST { method: RESTMethod, url: &'a str, headers: &'a str, body: &'a str },
+    Raw(&'a [u8])
+}
+
+#[derive(PartialEq, Debug)]
+pub enum ResponseType<'a> {
+    Reserved,
+    REST { code: u16, body: &'a str },
+    Raw(&'a [u8])
+}
+
 #[derive(PartialEq, Debug)]
 pub struct RequestMessage<'a> {
-    signature: &'a [u8],
-    sequence_id: u16,
-    req_type: MessageType,
-    addr: &'a [u8],
-    payload: &'a [u8]
+    pub signature: &'a [u8],
+    pub sequence_id: u16,
+    pub req_type: RequestType<'a>,
+    pub addr: &'a str,
 }
 
 #[derive(PartialEq, Debug)]
 pub struct ResponseMessage<'a> {
-    addr: &'a [u8],
-    sequence_id: u16,
-    resp_type: MessageType,
-    payload: &'a [u8]
+    pub sequence_id: u16,
+    pub resp_type: ResponseType<'a>,
 }
 
 fn decode_type(flag: u8) -> io::Result<MessageType> {
@@ -35,18 +54,42 @@ fn decode_type(flag: u8) -> io::Result<MessageType> {
     }
 }
 
-fn decode_addr<'a>(data: &'a [u8]) -> io::Result<&'a [u8]> {
-    let mut len = 0;
-    
-    while len < data.len() {
-        if data[len] == 0 && len > 1 {
-            return Ok(&data[..len])
-        }
+fn decode_rest_method(data: &[u8]) -> io::Result<(RESTMethod, usize)> {
+    let methods = [
+        (&b"GET"[..], RESTMethod::GET),
+        (&b"PUT"[..], RESTMethod::PUT),
+        (&b"PATCH"[..], RESTMethod::PATCH),
+        (&b"POST"[..], RESTMethod::POST),
+        (&b"DELETE"[..], RESTMethod::DELETE)
+    ];
 
-        len += 1;
+    for (pattern, method) in methods.into_iter().cloned() {
+        if &data[..pattern.len()] == pattern {
+            return Ok((method, pattern.len()))
+        }
     }
 
-    Err(io::Error::new(io::ErrorKind::InvalidData, "Unable to find null terminator in address"))
+    return Err(io::Error::new(io::ErrorKind::InvalidData, "Unrecognized method"))
+}
+
+fn decode_null_delim<'a>(data: &'a [u8], offset: &mut usize) -> io::Result<&'a [u8]> {
+    if let Some(pos) = data.iter().skip(*offset).position(|&v| v == 0) {
+        let slice = &data[*offset..*offset+pos];
+        *offset += pos+1;
+        Ok(slice)
+    } else {
+        Err(io::Error::new(io::ErrorKind::InvalidData, "Missing null terminator"))
+    }
+}
+
+fn decode_null_delim_str<'a>(data: &'a [u8], offset: &mut usize) -> io::Result<&'a str> {
+    let delim = decode_null_delim(data, offset)?;
+    decode_str_slice(delim)
+}
+
+fn decode_str_slice<'a>(data: &'a [u8]) -> io::Result<&'a str> {
+    ::std::str::from_utf8(data)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Unable to translate to utf8 string"))
 }
 
 pub fn decode_request_message<'a>(data: &'a [u8]) -> io::Result<RequestMessage<'a>> {
@@ -59,62 +102,79 @@ pub fn decode_request_message<'a>(data: &'a [u8]) -> io::Result<RequestMessage<'
     let signature = &data[..64];
     offset += 64;
 
+    let addr = decode_null_delim_str(data, &mut offset)?;
+
     let sequence_id = io::Cursor::new(&data[offset..]).read_u16::<BigEndian>()?;
     offset += 2;
 
-    let req_type = decode_type(data[offset])?;
+    let msg_type = decode_type(data[offset])?;
     offset += 1;
 
-    let addr = decode_addr(&data[offset..])?;
-    offset += addr.len()+1;
-
     let payload = &data[offset..];
+
+    let req_type = match msg_type {
+        MessageType::Reserved => RequestType::Reserved,
+        MessageType::Raw => RequestType::Raw(payload),
+        MessageType::REST => {
+            let (method, mut data_read) = decode_rest_method(payload)?;
+            let url = decode_null_delim_str(payload, &mut data_read)?;
+            let headers = decode_null_delim_str(payload, &mut data_read)?;
+            let body = decode_str_slice(&payload[data_read..])?;
+
+            RequestType::REST { method, url, headers, body }
+        }
+    };
 
     Ok(RequestMessage {
         signature,
         sequence_id,
         req_type,
-        addr,
-        payload
+        addr
     })
 }
 
 pub fn decode_response_message<'a>(data: &'a [u8]) -> io::Result<ResponseMessage<'a>> {
-    let mut offset = 0;
-
-    let addr = decode_addr(data)?;
-    offset += addr.len()+1;
-
-    if offset + 2 >= data.len() {
+    if 2 + 1 >= data.len() {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "truncated"))
     }
+
+    let mut offset = 0;
 
     let sequence_id = io::Cursor::new(&data[offset..]).read_u16::<BigEndian>()?;
     offset += 2;
 
-    let resp_type = decode_type(data[offset])?;
+    let msg_type = decode_type(data[offset])?;
     offset += 1;
 
     let payload = &data[offset..];
 
+    let resp_type = match msg_type {
+        MessageType::Reserved => ResponseType::Reserved,
+        MessageType::Raw => ResponseType::Raw(payload),
+        MessageType::REST => {
+            let code = io::Cursor::new(&payload[..2]).read_u16::<BigEndian>()?;
+            let body = decode_str_slice(&payload[2..])?;
+
+            ResponseType::REST { code, body }
+        }
+    };
+
     Ok(ResponseMessage {
-        addr,
         sequence_id,
-        resp_type,
-        payload
+        resp_type
     })
 }
 
-fn encode_type(ty: &MessageType) -> u8 {
+fn encode_type(ty: MessageType) -> u8 {
     match ty {
-        &MessageType::Reserved => 0,
-        &MessageType::REST => 1,
-        &MessageType::Raw => 2
+        MessageType::Reserved => 0,
+        MessageType::REST => 1,
+        MessageType::Raw => 2
     }
 }
 
-fn encode_addr<W>(addr: &[u8], writer: &mut W) -> io::Result<()> where W: io::Write {
-    writer.write_all(addr)?;
+fn encode_str<W>(s: &str, writer: &mut W) -> io::Result<()> where W: io::Write {
+    writer.write_all(s.as_bytes())?;
     writer.write_all(&[0])?;
 
     Ok(())
@@ -122,36 +182,75 @@ fn encode_addr<W>(addr: &[u8], writer: &mut W) -> io::Result<()> where W: io::Wr
 
 pub fn encode_request_message<W>(msg: &RequestMessage, writer: &mut W) -> io::Result<()> where W: io::Write {
     writer.write_all(msg.signature)?;
+    encode_str(msg.addr, writer)?;
     writer.write_u16::<BigEndian>(msg.sequence_id)?;
-    writer.write_all(&[encode_type(&msg.req_type)])?;
-    encode_addr(msg.addr, writer)?;
-    writer.write_all(msg.payload)?;
+    match msg.req_type {
+        RequestType::Reserved => {
+            writer.write_all(&[encode_type(MessageType::Reserved)])?;
+        },
+        RequestType::Raw(ref payload) => {
+            writer.write_all(&[encode_type(MessageType::Reserved)])?;
+            writer.write_all(payload)?;
+        },
+        RequestType::REST { ref method, ref url, ref headers, ref body } => {
+            writer.write_all(&[encode_type(MessageType::REST)])?;
+            
+            match method {
+                &RESTMethod::GET => writer.write_all(&b"GET"[..])?,
+                &RESTMethod::PUT => writer.write_all(&b"PUT"[..])?,
+                &RESTMethod::POST => writer.write_all(&b"POST"[..])?,
+                &RESTMethod::PATCH => writer.write_all(&b"PATCH"[..])?,
+                &RESTMethod::DELETE => writer.write_all(&b"DELETE"[..])?
+            }
+
+            encode_str(url, writer)?;
+            encode_str(headers, writer)?;
+            writer.write_all(body.as_bytes())?;
+        }
+    }
 
     Ok(())
 }
 
-
 pub fn encode_response_message<W>(msg: &ResponseMessage, writer: &mut W) -> io::Result<()> where W: io::Write {
-    encode_addr(msg.addr, writer)?;
     writer.write_u16::<BigEndian>(msg.sequence_id)?;
-    writer.write_all(&[encode_type(&msg.resp_type)])?;
-    writer.write_all(msg.payload)?;
+    match msg.resp_type {
+        ResponseType::Reserved => {
+            writer.write_all(&[encode_type(MessageType::Reserved)])?;
+        },
+        ResponseType::Raw(ref payload) => {
+            writer.write_all(&[encode_type(MessageType::Reserved)])?;
+            writer.write_all(payload)?;
+        },
+        ResponseType::REST { code, ref body } => {
+            writer.write_all(&[encode_type(MessageType::REST)])?;
+            writer.write_u16::<BigEndian>(code)?;
+            writer.write_all(body.as_bytes())?;
+        }
+    }
 
     Ok(())
 }
 
 #[test]
 fn test_request() {
-    let callsign = b"KI7EST@rfnet.net";
-    let payload = (0..200).collect::<Vec<u8>>();
+    let callsign = "KI7EST@rfnet.net";
     let signature = (0..64).collect::<Vec<u8>>();
+
+    let url = "http://rfnet.net/v1/endpoint";
+    let headers = "key: value\nkey2: value2";
+    let body = "body";
 
     let req = RequestMessage {
         signature: &signature[..],
         sequence_id: 1000,
-        req_type: MessageType::REST,
         addr: &callsign[..],
-        payload: &payload[..]
+        req_type: RequestType::REST {
+            method: RESTMethod::GET,
+            url,
+            headers,
+            body
+        }
     };
 
     let mut encode = vec!();
@@ -163,15 +262,15 @@ fn test_request() {
 
 #[test]
 fn test_response() {
-    let callsign = b"KI7EST@rfnet.net";
     let payload = (0..200).collect::<Vec<u8>>();
     let signature = (0..64).collect::<Vec<u8>>();
 
     let resp = ResponseMessage {
         sequence_id: 1000,
-        resp_type: MessageType::REST,
-        addr: &callsign[..],
-        payload: &payload[..]
+        resp_type: ResponseType::REST {
+            code: 200,
+            body: "OK"
+        }
     };
 
     let mut encode = vec!();
