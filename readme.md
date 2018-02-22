@@ -198,13 +198,13 @@ Packet sent by Node to Link to perform some operation or query for data.
 #### Response
 Packet send from Link to Node in response to a request.
 ```
-callsign@hub\0|2b:sequenceId|1b:type|payload
+2b:sequenceId|1b:type|payload
 ```
 
 ##### Packet Type
 ```
 0: Reserved for extension
-1: REST response, payload takes format of: 1b:code|body
+1: REST response, payload takes format of: 2b:code|body
 2: Raw RF packet, payload takes format of: hub\0payload
 ```
 
