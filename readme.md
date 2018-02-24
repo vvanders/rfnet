@@ -140,7 +140,7 @@ This packet is sent every 5 minutes while a Link is idle. It describes the commo
 Control packets are used to negotiate channel status, flow control and deliver out of band notifications.
 
 ```
-1b:(PacketType+ControlType)|2b:SessionId|Nb:Callsign\0TargetCallsign|(Nb+1b+2b)*2:FEC
+1b:(PacketType+ControlType)|Nb:Callsign\0TargetCallsign|(Nb+1b+2b)*2:FEC
 ```
 
 ##### Control type(64)
@@ -198,7 +198,7 @@ Packet sent by Node to Link to perform some operation or query for data.
 #### Response
 Packet send from Link to Node in response to a request.
 ```
-2b:sequenceId|1b:type|payload
+1b:type|payload
 ```
 
 ##### Packet Type
