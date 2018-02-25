@@ -78,7 +78,7 @@ pub fn encode<R,W>(mut data: R, mut encoded: W, port: u8) -> io::Result<usize> w
         }
     }
 
-    debug!("Encoded KISS frame of {} bytes for port {}", written, port);
+    trace!("Encoded KISS frame of {} bytes for port {}", written, port);
     Ok(written)
 }
 
@@ -127,7 +127,7 @@ pub fn encode_cmd(encoded: &mut Vec<u8>, cmd: u8, data: u8, port: u8) {
 
     encoded.push(FEND);
 
-    debug!("Encoded KISS command {} {} for port {}", cmd, data, port);
+    trace!("Encoded KISS command {} {} for port {}", cmd, data, port);
 }
 
 /// Result from a decode operation
@@ -250,7 +250,7 @@ pub fn decode<T>(data: T, decoded: &mut Vec<u8>) -> Option<DecodedFrame> where T
             start_idx.and_then(|start_idx| {
                 let payload_size = end_idx - start_idx;
 
-                debug!("Decoded KISS frame of {} bytes on port {}", payload_size, port);
+                trace!("Decoded KISS frame of {} bytes on port {}", payload_size, port);
 
                 Some(DecodedFrame {
                     port: port,
@@ -260,7 +260,6 @@ pub fn decode<T>(data: T, decoded: &mut Vec<u8>) -> Option<DecodedFrame> where T
             })
         })
     }).or_else(|| {
-        debug!("Empty or incomplete frame, skipping decode");
         None
     })
 }

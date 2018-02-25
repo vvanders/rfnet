@@ -36,7 +36,6 @@ pub enum ControlType {
 #[derive(Debug, PartialEq, Clone)]
 pub struct ControlPacket<'a> {
     pub ctrl_type: ControlType,
-    pub session_id: u16,
     pub source_callsign: &'a [u8],
     pub dest_callsign: &'a [u8]
 }
@@ -105,14 +104,14 @@ pub fn encode<'a,T>(packet: &Packet<'a>, fec_enabled: bool, writer: &mut T) -> i
     }
 }
 
-pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: usize, data: &mut R, writer: &mut W) -> io::Result<(usize, usize, bool)> where W: Write, R: Read {
+pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: u16, data: &mut R, writer: &mut W) -> io::Result<(usize, usize, bool)> where W: Write, R: Read {
     let (header_size, fec_bytes) = if fec {
         (3 + FEC_CRC_BYTES, get_fec_bytes(header.fec_bytes))
     } else {
         (3, 0)
     };
 
-    let data_size = link_width - header_size;
+    let data_size = link_width as usize - header_size;
 
     let block_count = if data_size % 256 != 0 {
         data_size / 256 + 1
@@ -181,10 +180,10 @@ pub fn encode_data<W,R>(header: DataPacket, fec: bool, link_width: usize, data: 
     Ok((header_size + payload_written, data_written, eof))
 }
 
-pub fn data_bytes_per_packet(fec: Option<u8>, link_width: usize) -> usize {
+pub fn data_bytes_per_packet(fec: Option<u8>, link_width: u16) -> usize {
     match fec {
-        Some(fec_bytes) => link_width - 3 - FEC_CRC_BYTES - get_fec_bytes(fec_bytes),
-        None => link_width - 3
+        Some(fec_bytes) => link_width as usize - 3 - FEC_CRC_BYTES - get_fec_bytes(fec_bytes),
+        None => link_width as usize - 3
     }
 }
 
@@ -325,12 +324,11 @@ fn encode_inner<'a,T>(packet: &Packet<'a>, writer: &mut T) -> io::Result<usize> 
             let mut packet_type = CTRL_MASK | (CONTROL_TYPE_MASK & ctrl_type);
 
             writer.write_u8(packet_type)?;
-            writer.write_u16::<BigEndian>(header.session_id)?;
             writer.write_all(header.source_callsign)?;
             writer.write_u8(0)?;
             writer.write_all(header.dest_callsign)?;
 
-            Ok(4 + header.source_callsign.len() + header.dest_callsign.len())
+            Ok(2 + header.source_callsign.len() + header.dest_callsign.len())
         },
         &Packet::Data(ref header, ref _content) => {
             let mut packet_idx = header.packet_idx & ((!PACKET_TYPE_MASK as u16) << 8 | 0xFF);
@@ -492,7 +490,7 @@ fn decode_ack<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
 }
 
 fn decode_ctrl<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
-    if data.len() < 6 {
+    if data.len() < 4 {
         return Err(PacketDecodeError::BadFormat)
     }
 
@@ -507,9 +505,7 @@ fn decode_ctrl<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
         _ => return Err(PacketDecodeError::BadFormat)
     };
 
-    let session_id = Cursor::new(&data[1..3]).read_u16::<BigEndian>().map_err(|_| PacketDecodeError::BadFormat)?;
-    
-    let callsign_block = &data[3..];
+    let callsign_block = &data[1..];
 
     //We separate callsigns by the null terminator
     let callsign_split = callsign_block.iter().position(|v| *v == 0);
@@ -524,7 +520,6 @@ fn decode_ctrl<'a>(data: &'a [u8]) -> Result<Packet<'a>, PacketDecodeError> {
 
     Ok(Packet::Control(ControlPacket {
         ctrl_type,
-        session_id,
         source_callsign,
         dest_callsign
     }))
@@ -693,7 +688,6 @@ mod test {
         for ctype in control_types.iter().cloned() {
             verify_packet(Packet::Control(ControlPacket {
                 ctrl_type: ctype,
-                session_id: 1000,
                 source_callsign: scratch_callsign.as_bytes(),
                 dest_callsign: scratch_callsign.as_bytes()
             }), 3 + scratch_callsign.as_bytes().len() * 2)
@@ -706,7 +700,6 @@ mod test {
 
                 verify_packet(Packet::Control(ControlPacket {
                     ctrl_type: ControlType::LinkRequest,
-                    session_id: 1000,
                     source_callsign: &source_callsign[..],
                     dest_callsign: &dest_callsign[..]
                 }), (3 + i + j) as usize);
@@ -716,7 +709,6 @@ mod test {
         for i in 0..16384 {
             verify_packet(Packet::Control(ControlPacket {
                 ctrl_type: ControlType::LinkRequest,
-                session_id: i,
                 source_callsign: &[1],
                 dest_callsign: &[1]
             }), 3 + 2)
@@ -903,7 +895,7 @@ mod test {
             let data = (0..512).map(|v| v as u8).collect::<Vec<u8>>();
 
             let mut scratch = vec!();
-            let (written, data_written, eof) = encode_data(packet.clone(), true, BLOCK_SIZE, &mut Cursor::new(data), &mut scratch).unwrap();
+            let (written, data_written, eof) = encode_data(packet.clone(), true, BLOCK_SIZE as u16, &mut Cursor::new(data), &mut scratch).unwrap();
 
             assert_eq!(data_written, BLOCK_SIZE - get_fec_bytes(f) - 9);
             assert_eq!(written, BLOCK_SIZE);

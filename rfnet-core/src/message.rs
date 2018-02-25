@@ -41,7 +41,6 @@ pub struct RequestMessage<'a> {
 
 #[derive(PartialEq, Debug)]
 pub struct ResponseMessage<'a> {
-    pub sequence_id: u16,
     pub resp_type: ResponseType<'a>,
 }
 
@@ -140,9 +139,6 @@ pub fn decode_response_message<'a>(data: &'a [u8]) -> io::Result<ResponseMessage
 
     let mut offset = 0;
 
-    let sequence_id = io::Cursor::new(&data[offset..]).read_u16::<BigEndian>()?;
-    offset += 2;
-
     let msg_type = decode_type(data[offset])?;
     offset += 1;
 
@@ -160,7 +156,6 @@ pub fn decode_response_message<'a>(data: &'a [u8]) -> io::Result<ResponseMessage
     };
 
     Ok(ResponseMessage {
-        sequence_id,
         resp_type
     })
 }
@@ -213,7 +208,6 @@ pub fn encode_request_message<W>(msg: &RequestMessage, writer: &mut W) -> io::Re
 }
 
 pub fn encode_response_message<W>(msg: &ResponseMessage, writer: &mut W) -> io::Result<()> where W: io::Write {
-    writer.write_u16::<BigEndian>(msg.sequence_id)?;
     match msg.resp_type {
         ResponseType::Reserved => {
             writer.write_all(&[encode_type(MessageType::Reserved)])?;
@@ -262,11 +256,7 @@ fn test_request() {
 
 #[test]
 fn test_response() {
-    let payload = (0..200).collect::<Vec<u8>>();
-    let signature = (0..64).collect::<Vec<u8>>();
-
     let resp = ResponseMessage {
-        sequence_id: 1000,
         resp_type: ResponseType::REST {
             code: 200,
             body: "OK"

@@ -89,7 +89,6 @@ impl<'a,W,R,T> Node<'a,W,R,T> where W: io::Write, W: 'a, R: io::Write, R: 'a, T:
 
             let packet = Packet::Control(ControlPacket {
                 ctrl_type: ControlType::LinkRequest,
-                session_id: 0,
                 source_callsign: self.callsign.as_bytes(),
                 dest_callsign: dest
             });
@@ -171,14 +170,14 @@ impl<'a,W,R,T> Node<'a,W,R,T> where W: io::Write, W: 'a, R: io::Write, R: 'a, T:
                 let ack = match decode(data, fec)? {
                     (Packet::Control(ref header),_) if header.dest_callsign == callsign => {
                         match header.ctrl_type {
-                            ControlType::LinkOpened => Some(header.session_id),
-                            _ => None
+                            ControlType::LinkOpened => true,
+                            _ => false
                         }
                     },
-                    _ => None
+                    _ => false
                 };
 
-                if let Some(session_id) = ack {
+                if ack {
                     Some((State::Established, RecvResult::Ack(1,1)))
                 } else {
                     None

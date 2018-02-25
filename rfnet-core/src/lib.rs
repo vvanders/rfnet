@@ -21,3 +21,6 @@ mod message;
 
 #[cfg(test)]
 mod send_recv_int;
+
+const MAJOR_VER: u8 = 0;
+const MINOR_VER: u8 = 1;

@@ -14,23 +14,35 @@ pub trait FramedWrite : io::Write {
     }
 }
 
-pub struct KISSFramedWrite<W> where W: io::Write {
-    kiss_tnc: W,
-    port: u8,
-    pending_frame: Vec<u8>
+pub trait FramedRead {
+    fn read_frame<'a>(&'a mut self) -> io::Result<Option<&'a mut [u8]>>;
 }
 
-impl<W> KISSFramedWrite<W> where W: io::Write {
-    pub fn new(kiss_tnc: W, port: u8) -> KISSFramedWrite<W> {
-        KISSFramedWrite {
+pub struct KISSFramed<T> where T: io::Write + io::Read {
+    kiss_tnc: T,
+    port: u8,
+    pending_frame: Vec<u8>, //@todo: Stream this via io::Write
+    pending_recv: Vec<u8>,
+    recv_frame: Vec<u8>
+}
+
+impl<T> KISSFramed<T> where T: io::Write + io::Read {
+    pub fn new(kiss_tnc: T, port: u8) -> KISSFramed<T> {
+        KISSFramed {
             kiss_tnc,
             port,
-            pending_frame: vec!()
+            pending_frame: vec!(),
+            pending_recv: vec!(),
+            recv_frame: vec!()
         }
+    }
+
+    pub fn get_tnc(&mut self) -> &mut T {
+        &mut self.kiss_tnc
     }
 }
 
-impl<W> FramedWrite for KISSFramedWrite<W> where W: io::Write {
+impl<T> FramedWrite for KISSFramed<T> where T: io::Write + io::Read {
     fn start_frame(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -45,7 +57,31 @@ impl<W> FramedWrite for KISSFramedWrite<W> where W: io::Write {
     }
 }
 
-impl<W> io::Write for KISSFramedWrite<W> where W: io::Write {
+impl<T> FramedRead for KISSFramed<T> where T: io::Write + io::Read {
+    fn read_frame<'a>(&'a mut self) -> io::Result<Option<&'a mut [u8]>> {
+        loop {
+            let mut scratch: [u8; 256] = unsafe { ::std::mem::uninitialized() };
+            match self.kiss_tnc.read(&mut scratch) {
+                Ok(0) => break,
+                Ok(n) => self.pending_recv.extend_from_slice(&scratch[..n]),
+                Err(e) => match e.kind() {
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted => break,
+                    _ => return Err(e)
+                }
+            }
+        }
+
+        self.recv_frame.clear();
+        if let Some(decoded) = kiss::decode(self.pending_recv.iter().cloned(), &mut self.recv_frame) {
+            self.pending_recv.drain(..decoded.bytes_read);
+            Ok(Some(&mut self.recv_frame[..]))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<T> io::Write for KISSFramed<T> where T: io::Write + io::Read {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.pending_frame.write(buf)
     }
@@ -56,6 +92,42 @@ impl<W> io::Write for KISSFramedWrite<W> where W: io::Write {
 }
 
 //For testing
+pub struct LoopbackIo {
+    buffer: Vec<u8>
+}
+
+impl LoopbackIo {
+    pub fn new() -> LoopbackIo {
+        LoopbackIo {
+            buffer: vec!()
+        }
+    }
+
+    pub fn buffer_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.buffer
+    }
+}
+
+impl io::Write for LoopbackIo {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl io::Read for LoopbackIo {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let count = ::std::cmp::min(self.buffer.len(), buf.len());
+        buf[..count].copy_from_slice(&self.buffer[..count]);
+        self.buffer.drain(..count);
+
+        Ok(count)
+    }
+}
+
 impl FramedWrite for Vec<u8> {
     fn start_frame(&mut self) -> io::Result<()> {
         Ok(())
@@ -67,23 +139,18 @@ impl FramedWrite for Vec<u8> {
 }
 
 #[test]
-fn test_encode_kiss() {
+fn test_encode_decode() {
     let data = (0..256).map(|v| v as u8).collect::<Vec<u8>>();
 
-    let mut encoded = vec!();
-    {
-        let mut encoder = KISSFramedWrite::new(&mut encoded, 0);
-        encoder.write_frame(&data[..]).unwrap();
-    }
+    let mut framed = KISSFramed::new(LoopbackIo::new(), 0);
 
-    let mut decoded_data = vec!();
-    let decoded = kiss::decode(encoded.into_iter(), &mut decoded_data);
+    framed.write_frame(&data[..]).unwrap();
+    assert_eq!(framed.read_frame().unwrap().unwrap(), &data[..]);
+    assert!(framed.read_frame().unwrap().is_none());
 
-    if let Some(frame) = decoded {
-        assert_eq!(frame.port, 0);
-        assert_eq!(frame.payload_size, data.len());
-        assert_eq!(data, decoded_data);
-    } else {
-        panic!();
-    }
+    framed.write_frame(&data[..]).unwrap();
+    framed.write_frame(&data[..]).unwrap();
+    assert_eq!(framed.read_frame().unwrap().unwrap(), &data[..]);
+    assert_eq!(framed.read_frame().unwrap().unwrap(), &data[..]);
+    assert!(framed.read_frame().unwrap().is_none());
 }

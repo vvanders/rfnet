@@ -2,55 +2,35 @@ use send_block::*;
 use recv_block::*;
 use kiss;
 use packet;
-use framed::{FramedWrite, KISSFramedWrite};
+use framed::{FramedWrite, FramedRead, KISSFramed, LoopbackIo};
 
 use std::io;
 
-fn cycle_recv<'a,F>(recv: &'a mut RecvBlock, send_channel: &mut F, recv_channel: &mut Vec<u8>, data_output: &mut Vec<u8>) -> Option<RecvResult<'a>>
-    where F: FramedWrite {
+fn cycle_recv<'a,F>(recv: &'a mut RecvBlock, send_channel: &mut F, recv_channel: &mut F, data_output: &mut Vec<u8>) -> Option<RecvResult<'a>>
+    where F: FramedWrite + FramedRead {
 
     recv.tick(100, send_channel).unwrap();
 
-    if recv_channel.len() > 0 {
-        let mut data = vec!();
-        let decoded = kiss::decode(recv_channel.iter().cloned(), &mut data);
+    if let Ok(Some(frame)) = recv_channel.read_frame() {
+        let packet = packet::decode(frame, true).unwrap();
+        let res = Some(recv.on_packet(&packet, send_channel, data_output).unwrap());
 
-        if let Some(decoded) = decoded {
-            let packet = packet::decode(&mut data[..], true).unwrap();
-
-            let res = Some(recv.on_packet(&packet, send_channel, data_output).unwrap());
-
-            recv_channel.drain(0..decoded.bytes_read);
-
-            res
-        } else {
-            None
-        }
+        res
     } else {
         None
     }
 }
 
-fn cycle_send<'a,F,R>(send: &'a mut SendBlock, send_channel: &mut Vec<u8>, recv_channel: &mut F, data_reader: &mut R) -> Option<SendResult<'a>>
-    where F: FramedWrite, R: io::Read {
+fn cycle_send<'a,F,R>(send: &'a mut SendBlock, send_channel: &mut F, recv_channel: &mut F, data_reader: &mut R) -> Option<SendResult<'a>>
+    where F: FramedWrite + FramedRead, R: io::Read {
 
     send.tick(100, recv_channel).unwrap();
 
-    if send_channel.len() > 0 {
-        let mut data = vec!();
-        let decoded = kiss::decode(send_channel.iter().cloned(), &mut data);
+    if let Ok(Some(frame)) = send_channel.read_frame() {
+        let packet = packet::decode(frame, true).unwrap();
+        let res = Some(send.on_packet(&packet.0, recv_channel, data_reader).unwrap());
 
-        if let Some(decoded) = decoded {
-            let packet = packet::decode(&mut data[..], true).unwrap();
-
-            let res = Some(send.on_packet(&packet.0, recv_channel, data_reader).unwrap());
-
-            send_channel.drain(0..decoded.bytes_read);
-
-            res
-        } else {
-            None
-        }
+        res
     } else {
         None
     }
@@ -160,7 +140,6 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R) -> (SendStats, Recv
     let payload = (0..4096).map(|v| v as u8).collect::<Vec<u8>>();
     let mut received = vec!();
 
-    let session_id = 1000;
     let link_width = 64;
     let fec = Some(0);
     let retry = RetryConfig {
@@ -171,14 +150,14 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R) -> (SendStats, Recv
     };
 
     let stats = {
-        let mut send_chan = vec!();
-        let mut recv_chan = vec!();
+        let mut send_chan = KISSFramed::new(LoopbackIo::new(), 0);
+        let mut recv_chan = KISSFramed::new(LoopbackIo::new(), 0);
 
         let mut data_reader = io::Cursor::new(&payload[..]);
-        let mut send = SendBlock::new(payload.len(), session_id, link_width, fec, retry);
-        let mut recv = RecvBlock::new(session_id, fec.is_some());
+        let mut send = SendBlock::new(payload.len(), link_width, fec, Some(retry));
+        let mut recv = RecvBlock::new(fec.is_some());
 
-        send.send(&mut KISSFramedWrite::new(&mut recv_chan, 0), &mut data_reader).unwrap();
+        send.send(&mut recv_chan, &mut data_reader).unwrap();
 
         let mut send_idx = 0;
         let mut recv_idx = 0;
@@ -186,29 +165,29 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R) -> (SendStats, Recv
         let mut send_complete = false;
         let mut recv_complete = false;
         for i in 0..4096 {
-            match cycle_send(&mut send, &mut send_chan, &mut KISSFramedWrite::new(&mut recv_chan, 0), &mut data_reader) {
+            match cycle_send(&mut send, &mut send_chan, &mut recv_chan, &mut data_reader) {
                 Some(SendResult::CompleteNoResponse) => send_complete = true,
                 _ => {}
             }
 
-            if recv_chan.len() > 0 {
+            if recv_chan.get_tnc().buffer_mut().len() > 0 {
                 send_idx += 1;
 
-                drop_send_fn(i, send_idx, &mut recv_chan);
+                drop_send_fn(i, send_idx, recv_chan.get_tnc().buffer_mut());
             }
 
-            match cycle_recv(&mut recv, &mut KISSFramedWrite::new(&mut send_chan, 0), &mut recv_chan, &mut received) {
+            match cycle_recv(&mut recv, &mut send_chan, &mut recv_chan, &mut received) {
                 Some(RecvResult::Complete) => recv_complete = true,
                 Some(RecvResult::CompleteSendResponse) => {
-                    recv.send_response(false, &mut KISSFramedWrite::new(&mut send_chan, 0)).unwrap();
+                    recv.send_response(false, &mut send_chan).unwrap();
                 },
                 _ => {}
             }
 
-            if send_chan.len() > 0 {
+            if send_chan.get_tnc().buffer_mut().len() > 0 {
                 recv_idx += 1;
 
-                drop_recv_fn(i, recv_idx, &mut send_chan);
+                drop_recv_fn(i, recv_idx, send_chan.get_tnc().buffer_mut());
             }
 
             if send_complete && recv_complete {

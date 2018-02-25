@@ -3,8 +3,8 @@ use framed::FramedWrite;
 
 use std::io;
 
+#[derive(Debug)]
 pub struct RecvBlock {
-    session_id: u16,
     fec: bool,
     packet_idx: u16,
     last_heard: usize,
@@ -63,9 +63,8 @@ const TIMEOUT_MS: usize = 10_000;
 const PENDING_REPEAT_MS: usize = 500;
 
 impl RecvBlock {
-    pub fn new(session_id: u16, fec: bool) -> RecvBlock {
+    pub fn new(fec: bool) -> RecvBlock {
         RecvBlock {
-            session_id,
             fec,
             packet_idx: 0,
             last_heard: 0,
@@ -86,11 +85,7 @@ impl RecvBlock {
         &self.stats
     }
 
-    pub fn get_session_id(&self) -> u16 {
-        self.session_id
-    }
-
-    fn send_nack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
+    fn send_nack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> io::Result<()> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx,
             nack: true,
@@ -103,12 +98,12 @@ impl RecvBlock {
         encode(&packet, fec, packet_writer).map(|_| ())?;
         packet_writer.end_frame()?;
 
-        trace!("Send NACK {}", packet_idx);
+        debug!("Send NACK {}", packet_idx);
 
         Ok(())
     }
 
-    fn send_ack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
+    fn send_ack<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> io::Result<()> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx,
             nack: false,
@@ -121,12 +116,12 @@ impl RecvBlock {
         encode(&packet, fec, packet_writer).map(|_| ())?;
         packet_writer.end_frame()?;
 
-        trace!("Send ACK {}", packet_idx);
+        debug!("Send ACK {}", packet_idx);
 
         Ok(())
     }
 
-    fn send_pending_response<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
+    fn send_pending_response<W>(packet_idx: u16, err: u16, fec: bool, packet_writer: &mut W) -> io::Result<()> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx,
             nack: false,
@@ -139,12 +134,12 @@ impl RecvBlock {
         encode(&packet, fec, packet_writer).map(|_| ())?;
         packet_writer.end_frame()?;
 
-        trace!("Send Pending Response {}", packet_idx);
+        debug!("Send Pending Response {}", packet_idx);
 
         Ok(())
     }
 
-    fn send_response_result<W>(response: Option<bool>, packet_idx: u16, fec: bool, packet_writer: &mut W) -> Result<(), RecvError> where W: FramedWrite {
+    fn send_response_result<W>(response: Option<bool>, packet_idx: u16, fec: bool, packet_writer: &mut W) -> io::Result<()> where W: FramedWrite {
         let packet = Packet::Ack(AckPacket {
             packet_idx: packet_idx,
             nack: false,
@@ -157,7 +152,7 @@ impl RecvBlock {
         encode(&packet, fec, packet_writer).map(|_| ())?;
         packet_writer.end_frame()?;
 
-        trace!("Send Response {} {}", packet_idx, response.unwrap());
+        debug!("Send Response {} {}", packet_idx, response.unwrap());
 
         Ok(())
     }
@@ -172,9 +167,7 @@ impl RecvBlock {
                     header.packet_idx
                 };
 
-                if self.packet_idx == 0 && header.start_flag && header.packet_idx != self.session_id {
-                    Self::send_nack(0, err as u16, self.fec, packet_writer)?;
-                } else if packet_idx == self.packet_idx {
+                if packet_idx == self.packet_idx {
                     self.last_heard = 0;
                     self.last_sent = 0;
 
@@ -192,10 +185,10 @@ impl RecvBlock {
                         Err(e) => Err(e)?
                     };
 
-                    trace!("Received data packet {} of {} bytes with {} FEC", header.packet_idx, self.decode_block.len(), header.fec_bytes);
+                    debug!("Received data packet {} of {} bytes with {} FEC", header.packet_idx, self.decode_block.len(), header.fec_bytes);
 
                     if self.waiting_for_response {
-                        trace!("Already heard this packet and waiting for response ack, discarding");
+                        debug!("Already heard this packet and waiting for response ack, discarding");
                     } else {
                         data_output.write(&self.decode_block[..])?;
                     }
@@ -244,7 +237,7 @@ impl RecvBlock {
         if self.waiting_for_response {
             if self.last_sent >= PENDING_REPEAT_MS {
                 if self.response.is_none() {
-                    trace!("Pending Response timeout");
+                    debug!("Pending Response timeout");
                     Self::send_pending_response(self.packet_idx, 0, self.fec, packet_writer)?;
                 } else {
                     if self.last_heard >= TIMEOUT_MS {
@@ -252,7 +245,7 @@ impl RecvBlock {
                         return Err(RecvError::TimedOut)
                     }
 
-                    trace!("Response timeout");
+                    debug!("Response timeout");
                     Self::send_response_result(self.response, self.packet_idx, self.fec, packet_writer)?;
                 }
                 self.last_sent = 0;
@@ -304,7 +297,7 @@ mod test {
     fn send_to_response<'a>(recv_data: &'a mut Vec<u8>) -> RecvBlock {
         let payload = get_payload();
 
-        let mut recv = RecvBlock::new(1000, true);
+        let mut recv = RecvBlock::new(true);
 
         let mut output = vec!();
         let mut data_packet = vec!();
@@ -391,7 +384,7 @@ mod test {
 
     #[test]
     fn test_timeout() {
-        let mut recv = RecvBlock::new(1000, true);
+        let mut recv = RecvBlock::new(true);
         let mut output = vec!();
 
         match recv.tick(10, &mut output) {
@@ -507,7 +500,7 @@ mod test {
         let payload = get_payload();
 
         {
-            let mut recv = RecvBlock::new(1000, true);
+            let mut recv = RecvBlock::new(true);
 
             let mut output = vec!();
             let mut data_packet = vec!();
@@ -549,11 +542,14 @@ mod test {
 
     #[test]
     fn test_reack() {
+        use kiss;
+        use framed;
+
         let mut recv_data = vec!();
         let payload = get_payload();
 
         {
-            let mut recv = RecvBlock::new(1000, true);
+            let mut recv = RecvBlock::new(true);
 
             let mut output = vec!();
             let mut data_packet = vec!();

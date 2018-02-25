@@ -3,15 +3,15 @@ use framed::FramedWrite;
 
 use std::io;
 
+#[derive(Debug)]
 pub struct SendBlock {
-    session_id: u16,
     packet_idx: u16,
     pending_response: bool,
     last_send: usize,
     retry_attempts: usize,
     stats: SendStats,
     config: SendConfig,
-    retry_config: RetryConfig,
+    retry_config: Option<RetryConfig>,
     last_packet: Vec<u8>
 }
 
@@ -23,12 +23,14 @@ pub struct SendStats {
     pub recv_bit_err: usize
 }
 
+#[derive(Debug)]
 struct SendConfig {
     fec: Option<u8>,
-    link_width: usize,
+    link_width: u16,
     data_size: usize
 }
 
+#[derive(Debug,Clone)]
 pub struct RetryConfig {
     pub delay_ms: usize,
     pub bps: usize,
@@ -57,9 +59,8 @@ impl From<io::Error> for SendError {
 }
 
 impl SendBlock {
-    pub fn new(data_size: usize, session_id: u16, link_width: usize, fec: Option<u8>, retry_config: RetryConfig) -> SendBlock {
+    pub fn new(data_size: usize, link_width: u16, fec: Option<u8>, retry_config: Option<RetryConfig>) -> SendBlock {
         SendBlock {
-            session_id, 
             packet_idx: 0,
             pending_response: false,
             last_send: 0,
@@ -88,7 +89,7 @@ impl SendBlock {
         self.config.fec = fec;
     }
 
-    fn send_data<W,R>(&mut self, packet_idx: u16, packet_writer: &mut W, data_reader: &mut R) -> Result<(), SendError>
+    fn send_data<W,R>(&mut self, packet_idx: u16, packet_writer: &mut W, data_reader: &mut R) -> io::Result<()>
             where W: FramedWrite, R: io::Read {
         self.retry_attempts = 0;
         self.last_send = 0;
@@ -111,7 +112,7 @@ impl SendBlock {
         self.stats.packets_sent += 1;
         self.stats.bytes_sent += data_written;
 
-        trace!("Sending data packet {}", packet_idx);
+        debug!("Sending data packet {}", packet_idx);
 
         Ok(())
     }
@@ -121,9 +122,11 @@ impl SendBlock {
         self.stats.missed_acks += 1;
         self.last_send = 0;
 
-        if self.retry_attempts > self.retry_config.retry_attempts {
-            info!("Exceeded {} retry attempts, connection lost", self.retry_attempts);
-            return Err(SendError::TimeOut)
+        if let &Some(ref retry_config) = &self.retry_config {
+            if self.retry_attempts > retry_config.retry_attempts {
+                info!("Exceeded {} retry attempts, connection lost", self.retry_attempts);
+                return Err(SendError::TimeOut)
+            }
         }
 
         packet_writer.write_frame(&self.last_packet[..])?;
@@ -149,9 +152,8 @@ impl SendBlock {
         Ok(())
     }
 
-    pub fn send<W,R>(&mut self, packet_writer: &mut W, data_reader: &mut R) -> Result<SendResult, SendError> where W: FramedWrite, R: io::Read {
-        let packet_idx = self.session_id;
-        self.send_data(packet_idx, packet_writer, data_reader)?;
+    pub fn send<W,R>(&mut self, packet_writer: &mut W, data_reader: &mut R) -> io::Result<SendResult> where W: FramedWrite, R: io::Read {
+        self.send_data(0, packet_writer, data_reader)?;
 
         Ok(SendResult::Status(&self.stats))
     }
@@ -162,14 +164,12 @@ impl SendBlock {
             &Packet::Ack(ref ack) => {
                 if ack.packet_idx == self.packet_idx {
                     self.stats.recv_bit_err += ack.corrected_errors as usize;
-                    trace!("Err {} {}", ack.corrected_errors, self.stats.recv_bit_err);
-
                     if ack.nack {
-                        trace!("Heard NACK for {}, resending", self.packet_idx);
+                        debug!("Heard NACK for {}, resending", self.packet_idx);
                         self.resend(packet_writer)?;
                     } else {
                         if ack.pending_response {
-                            trace!("Endpoint is pending response");
+                            debug!("Endpoint is pending response");
                             self.pending_response = true;
                             return Ok(SendResult::PendingResponse)
                         } else if self.pending_response {
@@ -182,7 +182,7 @@ impl SendBlock {
                                 return Ok(SendResult::CompleteResponse)
                             }
                         } else {
-                            trace!("Heard ACK for {}", ack.packet_idx);
+                            debug!("Heard ACK for {}", ack.packet_idx);
                             self.packet_idx = self.packet_idx + 1;
 
                             let packet_idx = self.packet_idx;
@@ -190,7 +190,7 @@ impl SendBlock {
                         }
                     }
                 } else {
-                    trace!("Heard ack for bad packet index {} != {}", ack.packet_idx, self.packet_idx);
+                    debug!("Heard ack for bad packet index {} != {}", ack.packet_idx, self.packet_idx);
                 }
             },
             _ => {}
@@ -200,11 +200,19 @@ impl SendBlock {
     }
 
     pub fn tick<W>(&mut self, elapsed_ms: usize, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
-        self.last_send = self.last_send + elapsed_ms;
-        let next_retry = ((self.retry_config.bps * 8 * self.last_packet.len()) as f32 * (self.retry_config.bps_scale / 1000.0)) as usize + self.retry_config.delay_ms;
+        let resend = {
+            if let &Some(ref retry_config) = &self.retry_config {
+                self.last_send = self.last_send + elapsed_ms;
+                let next_retry = ((retry_config.bps * 8 * self.last_packet.len()) as f32 * (retry_config.bps_scale / 1000.0)) as usize + retry_config.delay_ms;
 
-        if self.last_send > next_retry && !self.pending_response {
-            trace!("Missed ack, resending data packet");
+                self.last_send > next_retry && !self.pending_response
+            } else {
+                false
+            }
+        };
+
+        if resend {
+            debug!("Missed ack, resending data packet");
             self.resend(packet_writer)?;
         }
 
@@ -229,13 +237,13 @@ mod test {
         let mut output = vec!();
 
         let mut data_reader = io::Cursor::new(&data);
-        let mut send = SendBlock::new(data.len(), 1000, 32, Some(0), retry);
+        let mut send = SendBlock::new(data.len(), 32, Some(0), Some(retry));
 
         match send.send(&mut output, &mut data_reader).unwrap() {
             SendResult::Status(_) => {
                 let decoded = decode(&mut output[..], true).unwrap();
                 if let &(Packet::Data(ref header, payload),_) = &decoded {
-                    assert_eq!(header.packet_idx, 1000);
+                    assert_eq!(header.packet_idx, 0);
                     assert_eq!(header.start_flag, true);
                     assert_eq!(header.end_flag, true);
                     assert_eq!(header.fec_bytes, 0);
@@ -288,7 +296,7 @@ mod test {
         let mut output = vec!();
 
         let mut data_reader = io::Cursor::new(&data);
-        let mut send = SendBlock::new(data.len(), 1000, 32, Some(0), retry);
+        let mut send = SendBlock::new(data.len(), 32, Some(0), Some(retry));
         send.send(&mut output, &mut data_reader).unwrap();
 
         let expected_resend = (output.len() * 8 * 1000) / 1200;
@@ -331,7 +339,7 @@ mod test {
         let bytes_per_packet = data_bytes_per_packet(fec, link_width);
 
         let mut data_reader = io::Cursor::new(&data);
-        let mut send = SendBlock::new(data.len(), 1000, link_width, fec, retry);
+        let mut send = SendBlock::new(data.len(), link_width, fec, Some(retry));
 
         match send.send(&mut output, &mut data_reader).unwrap() {
             SendResult::Status(_) => {},
@@ -351,7 +359,7 @@ mod test {
         let remaining_full = data.len() / bytes_per_packet+1;
 
         for i in 0..remaining_full {
-            assert!(output.len() <= link_width, "{} <= {}", output.len(), link_width);
+            assert!(output.len() <= link_width as usize, "{} <= {}", output.len(), link_width);
 
             assert_eq!(send.get_stats().packets_sent, i+1);
 
@@ -359,7 +367,7 @@ mod test {
                 let decoded = decode(&mut output[..], true).unwrap();
                 if let &(Packet::Data(ref header, payload),_) = &decoded {
                     if i == 0 {
-                        assert_eq!(header.packet_idx, 1000);
+                        assert_eq!(header.packet_idx, 0);
                         assert_eq!(header.start_flag, true);
                     } else if i == remaining_full-1 {
                         assert_eq!(header.packet_idx, i as u16);
@@ -419,5 +427,19 @@ mod test {
             SendResult::CompleteNoResponse => {},
             o => panic!("{:?}", o)
         }
+    }
+
+    #[test]
+    fn test_no_resend() {
+        let data = (0..16).collect::<Vec<u8>>();
+        let mut output = vec!();
+
+        let mut data_reader = io::Cursor::new(&data);
+        let mut send = SendBlock::new(data.len(), 32, Some(0), None);
+        send.send(&mut output, &mut data_reader).unwrap();
+        output.clear();
+        send.tick(10_000, &mut output).unwrap();
+
+        assert_eq!(output.len(), 0);
     }
 }
