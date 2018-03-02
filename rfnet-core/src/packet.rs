@@ -215,6 +215,24 @@ const CONTROL_TYPE_MASK: u8 = 0b0000_0111;
 //Shared
 const FEC_CRC_BYTES: usize = 6;
 
+pub fn calc_ctrl_bytes(source: &str, dest: &str, fec: bool) -> usize {
+    let content_size = 1 + source.len() + dest.len() + 1;
+
+    if fec {
+        content_size * 3
+    } else {
+        content_size
+    }
+}
+
+pub fn calc_ack_bytes(fec: bool) -> usize {
+    if fec {
+        9
+    } else {
+        3
+    }
+}
+
 fn get_fec_bytes(fec_count: u8) -> usize {
     (fec_count+1) as usize * 2
 }

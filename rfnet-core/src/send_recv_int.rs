@@ -43,9 +43,6 @@ fn send_recv_full() {
 
 #[test]
 fn send_send_alt() {
-    use simple_logger;
-    simple_logger::init();
-
     let (send,recv) = cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
     let (send_alt,recv_alt) = cycle_data(
         |idx, sidx, data|
@@ -71,7 +68,7 @@ fn send_recv_alt() {
                 data.clear();
             });
 
-    assert_eq!(send.packets_sent*2, send_alt.packets_sent);
+    assert_eq!(send.packets_sent*2-1, send_alt.packets_sent);
     assert_eq!(recv.acks_sent*2, recv_alt.acks_sent);
     assert_eq!(recv_alt.packets_received-1, send_alt.packets_sent/2);
     assert_eq!(recv_alt.recv_bit_err, 0);
@@ -80,9 +77,6 @@ fn send_recv_alt() {
 
 #[test]
 fn send_flip() {
-    use simple_logger;
-    simple_logger::init();
-
     let mut errs = 0;
     let (send,recv) = {
         let errs_ref = &mut errs;
@@ -142,19 +136,14 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R) -> (SendStats, Recv
 
     let link_width = 64;
     let fec = Some(0);
-    let retry = RetryConfig {
-        delay_ms: 0,
-        bps: 1200,
-        bps_scale: 1.0,
-        retry_attempts: 5
-    };
+    let retry = RetryConfig::default(1200);
 
     let stats = {
         let mut send_chan = KISSFramed::new(LoopbackIo::new(), 0);
         let mut recv_chan = KISSFramed::new(LoopbackIo::new(), 0);
 
         let mut data_reader = io::Cursor::new(&payload[..]);
-        let mut send = SendBlock::new(payload.len(), link_width, fec, Some(retry));
+        let mut send = SendBlock::new(payload.len(), link_width, fec, true, retry);
         let mut recv = RecvBlock::new(fec.is_some());
 
         send.send(&mut recv_chan, &mut data_reader).unwrap();

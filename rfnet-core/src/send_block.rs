@@ -7,11 +7,12 @@ use std::io;
 pub struct SendBlock {
     packet_idx: u16,
     pending_response: bool,
+    eof: bool,
     last_send: usize,
     retry_attempts: usize,
     stats: SendStats,
     config: SendConfig,
-    retry_config: Option<RetryConfig>,
+    retry_config: RetryConfig,
     last_packet: Vec<u8>
 }
 
@@ -26,6 +27,7 @@ pub struct SendStats {
 #[derive(Debug)]
 struct SendConfig {
     fec: Option<u8>,
+    retry_enabled: bool,
     link_width: u16,
     data_size: usize
 }
@@ -58,11 +60,27 @@ impl From<io::Error> for SendError {
     }
 }
 
+impl RetryConfig {
+    pub fn calc_delay(&self, send_bytes: usize, recv_bytes: usize) -> usize {
+        ((self.bps as f32 / (8.0 * (send_bytes + recv_bytes) as f32) * 1000.0) * self.bps_scale) as usize + self.delay_ms
+    }
+
+    pub fn default(bps: usize) -> RetryConfig {
+        RetryConfig {
+            bps,
+            delay_ms: 0,
+            bps_scale: 1.5,
+            retry_attempts: 5
+        }
+    }
+}
+
 impl SendBlock {
-    pub fn new(data_size: usize, link_width: u16, fec: Option<u8>, retry_config: Option<RetryConfig>) -> SendBlock {
+    pub fn new(data_size: usize, link_width: u16, fec: Option<u8>, retry_enabled: bool, retry_config: RetryConfig) -> SendBlock {
         SendBlock {
             packet_idx: 0,
             pending_response: false,
+            eof: false,
             last_send: 0,
             retry_attempts: 0,
             stats: SendStats {
@@ -73,6 +91,7 @@ impl SendBlock {
             },
             config: SendConfig {
                 fec,
+                retry_enabled,
                 link_width,
                 data_size
             },
@@ -112,6 +131,10 @@ impl SendBlock {
         self.stats.packets_sent += 1;
         self.stats.bytes_sent += data_written;
 
+        if eof { 
+            self.eof = eof;
+        }
+
         debug!("Sending data packet {}", packet_idx);
 
         Ok(())
@@ -122,16 +145,15 @@ impl SendBlock {
         self.stats.missed_acks += 1;
         self.last_send = 0;
 
-        if let &Some(ref retry_config) = &self.retry_config {
-            if self.retry_attempts > retry_config.retry_attempts {
-                info!("Exceeded {} retry attempts, connection lost", self.retry_attempts);
-                return Err(SendError::TimeOut)
-            }
+        if self.retry_attempts > self.retry_config.retry_attempts {
+            info!("Exceeded {} retry attempts, connection lost", self.retry_attempts);
+            return Err(SendError::TimeOut)
         }
 
-        packet_writer.write_frame(&self.last_packet[..])?;
-
-        self.stats.packets_sent += 1;
+        if self.config.retry_enabled {
+            packet_writer.write_frame(&self.last_packet[..])?;
+            self.stats.packets_sent += 1;
+        }
 
         Ok(())
     }
@@ -172,7 +194,7 @@ impl SendBlock {
                             debug!("Endpoint is pending response");
                             self.pending_response = true;
                             return Ok(SendResult::PendingResponse)
-                        } else if self.pending_response {
+                        } else if self.pending_response || self.eof {
                             self.send_ack(packet_writer)?;
                             if !ack.response {
                                 info!("Transaction complete, no response");
@@ -201,14 +223,10 @@ impl SendBlock {
 
     pub fn tick<W>(&mut self, elapsed_ms: usize, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
         let resend = {
-            if let &Some(ref retry_config) = &self.retry_config {
-                self.last_send = self.last_send + elapsed_ms;
-                let next_retry = ((retry_config.bps * 8 * self.last_packet.len()) as f32 * (retry_config.bps_scale / 1000.0)) as usize + retry_config.delay_ms;
+            self.last_send = self.last_send + elapsed_ms;
+            let next_retry = self.retry_config.calc_delay(self.last_packet.len(), calc_ack_bytes(self.config.fec.is_some()));
 
-                self.last_send > next_retry && !self.pending_response
-            } else {
-                false
-            }
+            self.last_send > next_retry && !self.pending_response
         };
 
         if resend {
@@ -227,17 +245,12 @@ mod test {
     #[test]
     fn test_send() {
         let data = (0..16).collect::<Vec<u8>>();
-        let retry = RetryConfig {
-            delay_ms: 0,
-            bps: 1200,
-            bps_scale: 1.0,
-            retry_attempts: 5
-        };
+        let retry = RetryConfig::default(1200);
 
         let mut output = vec!();
 
         let mut data_reader = io::Cursor::new(&data);
-        let mut send = SendBlock::new(data.len(), 32, Some(0), Some(retry));
+        let mut send = SendBlock::new(data.len(), 32, Some(0), true, retry);
 
         match send.send(&mut output, &mut data_reader).unwrap() {
             SendResult::Status(_) => {
@@ -286,20 +299,15 @@ mod test {
     #[test]
     fn test_resend() {
         let data = (0..16).collect::<Vec<u8>>();
-        let retry = RetryConfig {
-            delay_ms: 0,
-            bps: 1200,
-            bps_scale: 1.0,
-            retry_attempts: 5
-        };
+        let retry = RetryConfig::default(1200);
 
         let mut output = vec!();
 
         let mut data_reader = io::Cursor::new(&data);
-        let mut send = SendBlock::new(data.len(), 32, Some(0), Some(retry));
+        let mut send = SendBlock::new(data.len(), 32, Some(0), true, retry.clone());
         send.send(&mut output, &mut data_reader).unwrap();
 
-        let expected_resend = (output.len() * 8 * 1000) / 1200;
+        let expected_resend = retry.calc_delay(output.len(), 9);
 
         for i in 0..5 {
             output.clear();
@@ -324,12 +332,7 @@ mod test {
     #[test]
     fn send_large() {
         let data = (0..4096).map(|v| v as u8).collect::<Vec<u8>>();
-        let retry = RetryConfig {
-            delay_ms: 0,
-            bps: 1200,
-            bps_scale: 1.0,
-            retry_attempts: 5
-        };
+        let retry = RetryConfig::default(1200);
 
         let mut output = vec!();
         let mut final_data = vec!();
@@ -339,7 +342,7 @@ mod test {
         let bytes_per_packet = data_bytes_per_packet(fec, link_width);
 
         let mut data_reader = io::Cursor::new(&data);
-        let mut send = SendBlock::new(data.len(), link_width, fec, Some(retry));
+        let mut send = SendBlock::new(data.len(), link_width, fec, true, retry);
 
         match send.send(&mut output, &mut data_reader).unwrap() {
             SendResult::Status(_) => {},
@@ -435,7 +438,7 @@ mod test {
         let mut output = vec!();
 
         let mut data_reader = io::Cursor::new(&data);
-        let mut send = SendBlock::new(data.len(), 32, Some(0), None);
+        let mut send = SendBlock::new(data.len(), 32, Some(0), false, RetryConfig::default(1200));
         send.send(&mut output, &mut data_reader).unwrap();
         output.clear();
         send.tick(10_000, &mut output).unwrap();

@@ -19,7 +19,8 @@ pub struct Link {
 pub struct LinkConfig {
     pub link_width: u16,
     pub fec: bool,
-    pub retry: Option<RetryConfig>,
+    pub retry_enabled: bool,
+    pub retry: RetryConfig,
     pub broadcast_rate: Option<usize>
 }
 
@@ -36,15 +37,6 @@ enum InnerState {
 }
 
 const NEGOTIATION_TIMEOUT: usize = 2000;
-
-pub fn default_retry(bps: usize) -> RetryConfig {
-    RetryConfig {
-        delay_ms: 0,
-        bps,
-        bps_scale: 1.0,
-        retry_attempts: 5
-    }
-}
 
 impl Link {
     pub fn new(callsign: &str, config: LinkConfig) -> Link {
@@ -229,7 +221,7 @@ impl Link {
                         None
                     };
 
-                    let mut send = SendBlock::new(response.len(), config.link_width, fec, config.retry.clone());
+                    let mut send = SendBlock::new(response.len(), config.link_width, fec, config.retry_enabled, config.retry.clone());
                     let mut payload = io::Cursor::new(response.clone());
 
                     send.send(packet_writer, &mut payload)?;
@@ -376,7 +368,7 @@ impl Link {
 
                         let packet = Packet::Broadcast(BroadcastPacket {
                             fec_enabled: self.config.fec,
-                            retry_enabled: self.config.retry.is_some(),
+                            retry_enabled: self.config.retry_enabled,
                             major_ver: ::MAJOR_VER,
                             minor_ver: ::MINOR_VER,
                             link_width: self.config.link_width,
@@ -492,7 +484,8 @@ mod test {
         let config = LinkConfig {
             link_width: 32,
             fec: true,
-            retry: Some(default_retry(1200)),
+            retry_enabled: true,
+            retry: RetryConfig::default(1200),
             broadcast_rate: None
         };
         let mut link = Link::new("KI7EST", config);
@@ -524,7 +517,8 @@ mod test {
         let config = LinkConfig {
             link_width: 32,
             fec: true,
-            retry: Some(default_retry(1200)),
+            retry_enabled: true,
+            retry: RetryConfig::default(1200),
             broadcast_rate: Some(10)
         };
         let mut link = Link::new("KI7EST", config);
@@ -550,7 +544,8 @@ mod test {
         let config = LinkConfig {
             link_width: 32,
             fec: true,
-            retry: Some(default_retry(1200)),
+            retry_enabled: true,
+            retry: RetryConfig::default(1200),
             broadcast_rate: None
         };
         let mut link = Link::new("KI7EST", config);
@@ -580,15 +575,11 @@ mod test {
 
     #[test]
     fn test_http() {
-        use simple_logger;
-        use log;
-        simple_logger::init().unwrap();
-        log::set_max_level(log::LevelFilter::Debug);
-
         let config = LinkConfig {
             link_width: 32,
             fec: true,
-            retry: Some(default_retry(1200)),
+            retry_enabled: true,
+            retry: RetryConfig::default(1200),
             broadcast_rate: None
         };
         let mut link = Link::new("KI7EST", config);
@@ -614,7 +605,7 @@ mod test {
                 }
             }, &mut payload).unwrap();
 
-        let mut sender = SendBlock::new(payload.len(), 32, Some(1), Some(default_retry(1200)));
+        let mut sender = SendBlock::new(payload.len(), 32, Some(1), true, RetryConfig::default(1200));
 
         let mut send = KISSFramed::new(LoopbackIo::new(), 0);
         let mut recv = KISSFramed::new(LoopbackIo::new(), 0);

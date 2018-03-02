@@ -1,300 +1,239 @@
 use packet::*;
-use acked_packet::{AckedPacket, AckResult};
+use framed::FramedWrite;
+use send_block::{SendBlock, RetryConfig};
 
 use std::io;
 
-#[derive(Clone)]
-pub enum State {
-    Listening(usize),
-    Idle,
-    Negotiating(AckedPacket),
-    Established
-}
-
-pub enum RecvResult {
-    BadPacket,
-    Noop,
-    Ack(usize,usize),
-    Complete(u16, bool),
-    Response(u16)
-}
-
-pub struct Node<'a,W,R,T> where W: io::Write, W:'a, R: io::Write, R: 'a, T: io::Read {
+pub struct Node {
     callsign: String,
-    packet_writer: &'a mut W,
-    response_writer: &'a mut R,
-    last_packet: Vec<u8>,
     state: State,
-    link_info: Option<LinkInformation>,
-    pending_requests: Vec<(u16,T)>,
-    next_request_id: u16
+    config: Option<LinkConfig>,
+    retry_config: RetryConfig
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct LinkInformation {
-    fec_enabled: bool,
-    retry_enabled: bool,
-    callsign: String,
-    link_width: u16,
-    major_ver: u8,
-    minor_ver: u8
+enum State {
+    Listening { idle: usize },
+    Idle,
+    Negotiating { retry_count: usize, last_attempt: usize },
+    Established,
+    SendingRequest,
+    ReceivingResponse
 }
 
+pub struct LinkConfig {
+    pub fec_enabled: bool,
+    pub retry_enabled: bool,
+    pub major_ver: u8,
+    pub minor_ver: u8,
+    pub link_width: u16,
+    pub callsign: String
+}
 
-const LISTEN_TIMEOUT: usize = 10 * 1000;
-const NEGOTIATE_RETRY: usize = 500;
+#[derive(Debug)]
+pub enum ClientState {
+    Listening,
+    Idle,
+    Negotiating,
+    Established,
+    Sending,
+    Receiving
+}
 
-impl<'a,W,R,T> Node<'a,W,R,T> where W: io::Write, W: 'a, R: io::Write, R: 'a, T: io::Read {
-    pub fn new(callsign: String, packet_writer: &'a mut W, response_writer: &'a mut R) -> Node<'a,W,R,T> {
+impl ClientState {
+    fn translate(state: &State) -> ClientState {
+        match state {
+            &State::Listening { idle: _idle } => ClientState::Listening,
+            &State::Idle => ClientState::Idle,
+            &State::Negotiating { retry_count: _r, last_attempt: _l } => ClientState::Negotiating,
+            &State::Established => ClientState::Established,
+            &State::SendingRequest => ClientState::Sending,
+            &State::ReceivingResponse => ClientState::Receiving
+        }
+    }
+}
+
+pub enum ClientEvent {
+    Connected,
+    ConnectionFailed,
+    Disconnected,
+    StateChange(ClientState,ClientState),
+    SendProgress(usize, usize),
+    RecvProgress(usize),
+    ResponseComplete
+}
+
+const LISTEN_TIMEOUT: usize = 10_000;
+
+impl Node {
+    pub fn new(callsign: String, config: Option<LinkConfig>, retry_config: RetryConfig) -> Node {
         Node {
             callsign,
-            packet_writer,
-            response_writer,
-            last_packet: vec!(),
-            state: State::Listening(0),
-            link_info: None,
-            pending_requests: vec!(),
-            next_request_id: 0
+            state: State::Listening { idle: 0 },
+            config,
+            retry_config
         }
     }
 
-    pub fn link_info(&self) -> &Option<LinkInformation> {
-        &self.link_info
-    }
-
-    pub fn send_request(&mut self, request_reader: T) -> io::Result<u16> {
-        let request_id = self.next_request_id;
-        self.next_request_id = self.next_request_id + 1;
-
-        self.pending_requests.push((request_id, request_reader));
-
-        //If we're idle kick over to connecting
-        self.connect().map(|_| request_id)
-    }
-
-    fn connect(&mut self) -> io::Result<()> {
-        if let State::Idle = self.state {
-            self.state = State::Negotiating(AckedPacket::new(NEGOTIATE_RETRY));
-            self.last_packet.clear();
-
-            let fec = self.is_fec_enabled();
-            //Destructure this here so we can borrow different fields as mut/non-mut
-            let &mut Node {ref link_info, ref mut packet_writer, .. } = self;
-
-            let dest = if let &Some(ref link_info) = link_info {
-                link_info.callsign.as_bytes()
-            } else {
-                &"".as_bytes()
-            };
-
-            let packet = Packet::Control(ControlPacket {
-                ctrl_type: ControlType::LinkRequest,
-                source_callsign: self.callsign.as_bytes(),
-                dest_callsign: dest
-            });
-
-            encode(&packet, fec, packet_writer).map(|_| ())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn is_fec_enabled(&self) -> bool {
-        self.link_info.as_ref().map(|v| v.fec_enabled).unwrap_or(true)
-    }
-
-    fn get_link_width(&self) -> u16 {
-        self.link_info.as_ref().map(|v| v.link_width).unwrap_or(256)
-    }
-
-    fn get_dest_callsign(&self) -> &str {
-        if let Some(ref link_info) = self.link_info {
-            &link_info.callsign.as_str()
-        } else {
-            &""
-        }
-    }
-
-    fn decode_broadcast(&mut self, data: &mut [u8]) -> Result<Option<LinkInformation>, PacketDecodeError> {
-        fn parse_link_info(header: &BroadcastPacket) -> LinkInformation {
-            LinkInformation {
-                fec_enabled: header.fec_enabled,
-                retry_enabled: header.retry_enabled,
-                link_width: header.link_width,
-                major_ver: header.major_ver,
-                minor_ver: header.minor_ver,
-                callsign: String::from_utf8_lossy(header.callsign).to_string()
-            }
-        }
-
-        let link_info = decode(data, self.is_fec_enabled()).map(|packet| {
-            match packet {
-                (Packet::Broadcast(ref header),_) => Some(parse_link_info(header)),
-                _ => None
-            }
-        });
-
-        if let Ok(Some(link_info)) = link_info {
-            Ok(Some(link_info))
-        } else if self.link_info.is_none() {
-            decode(data, false).map(|packet| {
-                match packet {
-                    (Packet::Broadcast(ref header),_) => Some(parse_link_info(header)),
-                    _ => None
-                }
-            })
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn recv_data(&mut self, data: &mut [u8]) -> Result<RecvResult, PacketDecodeError> {
-        let fec = self.is_fec_enabled();
-
-        let new_state = match self.state {
-            State::Listening(_) | State::Idle => {
-                let broadcast = self.decode_broadcast(data);
-
-                if let Ok(Some(link_info)) = broadcast {
-                    //Broadcast packets don't count towards listening/idle
-                    self.link_info = Some(link_info);
-
-                    None
-                } else {
-                    //Any packet while listening or idle resets out listen timer
-                    Some((State::Listening(0), RecvResult::Noop))
-                }
+    pub fn start_request(&mut self) -> bool {
+        match &self.state {
+            &State::Idle => {
+                true
             },
-            State::Negotiating(ref mut ack_state) => {
-                let callsign = self.callsign.as_bytes();
-                let ack = match decode(data, fec)? {
-                    (Packet::Control(ref header),_) if header.dest_callsign == callsign => {
-                        match header.ctrl_type {
-                            ControlType::LinkOpened => true,
-                            _ => false
+            &State::Established => {
+                true
+            },
+            o => {
+                info!("Unable to start request, in {:?} state", ClientState::translate(o));
+                false
+            }
+        }
+    }
+
+    fn link_config_from_broadcast(broadcast: &BroadcastPacket) -> LinkConfig {
+        LinkConfig {
+            fec_enabled: broadcast.fec_enabled,
+            retry_enabled: broadcast.retry_enabled,
+            major_ver: broadcast.major_ver,
+            minor_ver: broadcast.minor_ver,
+            link_width: broadcast.link_width,
+            callsign: String::from_utf8_lossy(broadcast.callsign).to_string()
+        }
+    }
+
+    fn send_negotiation_request<W>(source: &String, dest: &String, packet_writer: &mut W) -> io::Result<()> where W: FramedWrite {
+        Ok(())
+    }
+
+    pub fn on_data<P,W,R,E>(&mut self, packet: &(Packet, usize), packet_writer: &mut P, response_writer: &mut W, request_reader: &mut R, mut event_handler: E) -> io::Result<()> 
+            where P: FramedWrite, W: io::Write, R: io::Read, E: FnMut(ClientEvent) {
+        let new_state = match &mut self.state {
+            &mut State::Listening { ref mut idle } => {
+                match &packet.0 {
+                    &Packet::Broadcast(ref broadcast) => {
+                        self.config = Some(Self::link_config_from_broadcast(broadcast));
+                        info!("Heard broadcast packet from {}, channel is idle", String::from_utf8_lossy(broadcast.callsign));
+                        Some(State::Idle)
+                    },
+                    &Packet::Control(ref ctrl) => match ctrl.ctrl_type {
+                        ControlType::LinkClear if self.config.is_some() => Some(State::Idle),
+                        _ => {
+                            *idle = 0;
+                            None
                         }
                     },
-                    _ => false
-                };
+                    _ => {
+                        *idle = 0;
+                        None
+                    }
+                }
+            },
+            &mut State::Idle => {
+                if let &Packet::Broadcast(ref broadcast) = &packet.0 {
+                    self.config = Some(Self::link_config_from_broadcast(broadcast));
+                    None
+                } else {
+                    info!("Non-broadcast packet heard on channel, channel is busy");
+                    Some(State::Listening { idle: 0 })
+                }
+            },
+            &mut State::Negotiating { ref mut retry_count, ref mut last_attempt } => {
+                if let Packet::Control(ref ctrl) = packet.0 {
+                    if let Some(ref config) = self.config {
+                        let source = String::from_utf8_lossy(ctrl.source_callsign);
+                        let dest = String::from_utf8_lossy(ctrl.dest_callsign);
 
-                if ack {
-                    Some((State::Established, RecvResult::Ack(1,1)))
+                        if dest != self.callsign.as_str() || source != config.callsign {
+                            info!("Discarded link request from {}", source);
+                        }
+
+                        match ctrl.ctrl_type {
+                            ControlType::LinkOpened => {
+                                info!("Link established with {}", source);
+                                event_handler(ClientEvent::Connected);
+                                Some(State::Established)
+                            },
+                            _ => None
+                        }
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
             },
-            State::Established => None
+            &mut State::Established => {
+                None
+            }
+            &mut State::SendingRequest => {
+                None
+            },
+            &mut State::ReceivingResponse => {
+                None
+            }
         };
 
-        if let Some((new_state, result)) = new_state {
+        if let Some(new_state) = new_state {
+            event_handler(ClientEvent::StateChange(ClientState::translate(&self.state), ClientState::translate(&new_state)));
             self.state = new_state;
-            Ok(result)
-        } else {
-            Ok(RecvResult::Noop)
-        }
-    }
-
-    fn is_suspend_packet(packet: &Packet) -> bool {
-        if let &Packet::Control(ref ctrl) = packet {
-            if let ControlType::NodeWaiting = ctrl.ctrl_type {
-                return true
-            }
         }
 
-        false
+        Ok(())
     }
 
-    pub fn elapsed(&mut self, ms: usize) -> Result<bool, io::Error> {
-        let result = match self.state {
-            State::Listening(w) => {
-                let elapsed = ms+w;
-                if elapsed >= LISTEN_TIMEOUT {
+    pub fn tick<W,E>(&mut self, ms: usize, packet_writer: &mut W, mut handle_event: E) -> io::Result<()> where W: FramedWrite, E: FnMut(ClientEvent) {
+        let new_state = match &mut self.state {
+            &mut State::Listening { ref mut idle }=> {
+                *idle += ms;
+
+                if *idle >= LISTEN_TIMEOUT {
+                    info!("Nothing heard on channel, channel is idle");
                     Some(State::Idle)
                 } else {
-                    Some(State::Listening(elapsed))
+                    None
                 }
             },
-            State::Negotiating(ref mut ack_state) => {
-                match ack_state.tick(&self.last_packet[..], ms, &mut self.packet_writer) {
-                    Ok(AckResult::Failed) => Some(State::Listening(0)),
-                    Ok(AckResult::Waiting(_next_tick)) => None,
-                    Err(e) => None,
-                    _ => None
+            &mut State::Idle => None,
+            &mut State::Negotiating { ref mut retry_count, ref mut last_attempt } => {
+                if let Some(ref config) = self.config {
+                    *last_attempt += ms;
+
+                    if *retry_count >= self.retry_config.retry_attempts {
+                        info!("Failed to connect, resetting to listening");
+                        handle_event(ClientEvent::ConnectionFailed);
+
+                        Some(State::Listening { idle: 0 })
+                    } else {
+                        let ctrl_bytes = calc_ctrl_bytes(self.callsign.as_str(), config.callsign.as_str(), config.fec_enabled);
+                        if *last_attempt >= self.retry_config.calc_delay(ctrl_bytes, ctrl_bytes) {
+                            info!("Failed to hear negotiation response, resending");
+                            Self::send_negotiation_request(&self.callsign, &config.callsign, packet_writer)?;
+
+                            *last_attempt += 1;
+                            *retry_count += 1;
+                        }
+
+                        None
+                    }
+                } else {
+                    error!("Attempting to negotiate with empty config, resetting to listening");
+                    Some(State::Listening { idle: 0 })
                 }
             },
-            State::Established => None,
-            State::Idle => None
+            &mut State::Established => {
+                None
+            },
+            &mut State::SendingRequest => {
+                None
+            },
+            &mut State::ReceivingResponse => {
+                None
+            }
         };
 
-        if let Some(new_state) = result {
+        if let Some(new_state) = new_state {
             self.state = new_state;
         }
 
-        if let State::Idle = self.state {
-            Ok(false)
-        } else {
-            Ok(true)
-        }
+        Ok(())
     }
 }
-
-// #[cfg(test)]
-// mod test {
-//     use super::*;
-
-//     fn recv<W,R,T>(node: &mut Node<W,R,T>, packet: Packet, fec: bool) where W: io::Write, R: io::Write, T: io::Read {
-//         let mut scratch = vec!();
-
-//         encode(&packet, fec, &mut scratch).unwrap();
-//         node.recv_data(&mut scratch[..]).unwrap();
-//     }
-
-//     #[test]
-//     fn test_broadcast() {
-//         let callsign = "ki7est";
-//         let broadcast = BroadcastPacket {
-//             fec_enabled: true,
-//             retry_enabled: true,
-//             link_width: 32,
-//             major_ver: 1,
-//             minor_ver: 0,
-//             callsign: callsign.as_bytes()
-//         };
-
-//         let link_info = LinkInformation {
-//             fec_enabled: true,
-//             retry_enabled: true,
-//             link_width: 32,
-//             major_ver: 1,
-//             minor_ver: 0,
-//             callsign: callsign.to_string()
-//         };
-
-//         {
-//             let mut node = Node::new(callsign.to_string(),&mut vec!(), &mut vec!());
-//             recv(&mut node, Packet::Broadcast(broadcast.clone()), true);
-//             assert_eq!(node.link_info(), &Some(link_info.clone()));
-//         }
-
-//         {
-//             let mut node = Node::new(callsign.to_string(),&mut vec!(), &mut vec!());
-//             recv(&mut node, Packet::Broadcast(broadcast.clone()), false);
-//             assert_eq!(node.link_info(), &Some(link_info.clone()));
-//         }
-
-//         {
-//             let mut node = Node::new(callsign.to_string(),&mut vec!(), &mut vec!());
-//             recv(&mut node, Packet::Broadcast(broadcast.clone()), true);
-//             assert_eq!(node.link_info(), &Some(link_info.clone()));
-
-//             let mut new_state = broadcast.clone();
-//             new_state.link_width = 64;
-
-//             let mut new_info = link_info.clone();
-//             new_info.link_width = 64;
-
-//             recv(&mut node, Packet::Broadcast(new_state), true);
-//             assert_eq!(node.link_info(), &Some(new_info));
-//         }
-//     }
-// }
