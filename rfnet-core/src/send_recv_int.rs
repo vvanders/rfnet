@@ -6,7 +6,7 @@ use framed::{FramedWrite, FramedRead, KISSFramed, LoopbackIo};
 
 use std::io;
 
-fn cycle_recv<'a,F>(recv: &'a mut RecvBlock, send_channel: &mut F, recv_channel: &mut F, data_output: &mut Vec<u8>) -> Option<RecvResult<'a>>
+fn cycle_recv<'a,F>(recv: &'a mut RecvBlock, send_channel: &mut F, recv_channel: &mut F, data_output: &mut Vec<u8>) -> Option<RecvResult>
     where F: FramedWrite + FramedRead {
 
     recv.tick(100, send_channel).unwrap();
@@ -21,7 +21,7 @@ fn cycle_recv<'a,F>(recv: &'a mut RecvBlock, send_channel: &mut F, recv_channel:
     }
 }
 
-fn cycle_send<'a,F,R>(send: &'a mut SendBlock, send_channel: &mut F, recv_channel: &mut F, data_reader: &mut R) -> Option<SendResult<'a>>
+fn cycle_send<'a,F,R>(send: &'a mut SendBlock, send_channel: &mut F, recv_channel: &mut F, data_reader: &mut R) -> Option<SendResult>
     where F: FramedWrite + FramedRead, R: io::Read {
 
     send.tick(100, recv_channel).unwrap();

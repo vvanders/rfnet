@@ -41,8 +41,8 @@ pub struct RetryConfig {
 }
 
 #[derive(Debug)]
-pub enum SendResult<'a> {
-    Status(&'a SendStats),
+pub enum SendResult {
+    Active,
     PendingResponse,
     CompleteNoResponse,
     CompleteResponse
@@ -177,7 +177,7 @@ impl SendBlock {
     pub fn send<W,R>(&mut self, packet_writer: &mut W, data_reader: &mut R) -> io::Result<SendResult> where W: FramedWrite, R: io::Read {
         self.send_data(0, packet_writer, data_reader)?;
 
-        Ok(SendResult::Status(&self.stats))
+        Ok(SendResult::Active)
     }
 
     pub fn on_packet<W,R>(&mut self, packet: &Packet, packet_writer: &mut W, data_reader: &mut R) -> Result<SendResult, SendError>
@@ -218,7 +218,7 @@ impl SendBlock {
             _ => {}
         }
 
-        Ok(SendResult::Status(&self.stats))
+        Ok(SendResult::Active)
     }
 
     pub fn tick<W>(&mut self, elapsed_ms: usize, packet_writer: &mut W) -> Result<SendResult, SendError> where W: FramedWrite {
@@ -234,7 +234,7 @@ impl SendBlock {
             self.resend(packet_writer)?;
         }
 
-        Ok(SendResult::Status(&self.stats))
+        Ok(SendResult::Active)
     }
 }
 
@@ -253,7 +253,7 @@ mod test {
         let mut send = SendBlock::new(data.len(), 32, Some(0), true, retry);
 
         match send.send(&mut output, &mut data_reader).unwrap() {
-            SendResult::Status(_) => {
+            SendResult::Active => {
                 let decoded = decode(&mut output[..], true).unwrap();
                 if let &(Packet::Data(ref header, payload),_) = &decoded {
                     assert_eq!(header.packet_idx, 0);
@@ -345,7 +345,7 @@ mod test {
         let mut send = SendBlock::new(data.len(), link_width, fec, true, retry);
 
         match send.send(&mut output, &mut data_reader).unwrap() {
-            SendResult::Status(_) => {},
+            SendResult::Active => {},
             o => panic!("{:?}", o)
         }
 
@@ -409,7 +409,7 @@ mod test {
                     }
                 } else {
                     match result {
-                        SendResult::Status(_) => {},
+                        SendResult::Active => {},
                         o => panic!("{:?}", o)
                     }
                 }

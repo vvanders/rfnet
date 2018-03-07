@@ -24,8 +24,8 @@ pub struct RecvStats {
 }
 
 #[derive(Debug)]
-pub enum RecvResult<'a> {
-    Status(&'a RecvStats),
+pub enum RecvResult {
+    Active,
     CompleteSendResponse,
     Complete
 }
@@ -180,7 +180,7 @@ impl RecvBlock {
                             //Send NACK since we know id
                             Self::send_nack(packet_idx, err as u16, self.fec, packet_writer)?;
 
-                            return Ok(RecvResult::Status(&self.stats))
+                            return Ok(RecvResult::Active)
                         },
                         Err(e) => Err(e)?
                     };
@@ -227,7 +227,7 @@ impl RecvBlock {
             _ => {}
         }
 
-        Ok(RecvResult::Status(&self.stats))
+        Ok(RecvResult::Active)
     }
 
     pub fn tick<W>(&mut self, elapsed_ms: usize, packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: FramedWrite {
@@ -257,7 +257,7 @@ impl RecvBlock {
             }
         }
 
-        Ok(RecvResult::Status(&self.stats))
+        Ok(RecvResult::Active)
     }
 
     pub fn send_response<W>(&mut self, is_response: bool, packet_writer: &mut W) -> Result<RecvResult, RecvError> where W: FramedWrite {
@@ -303,7 +303,7 @@ mod test {
         let mut data_packet = vec!();
 
         match recv.on_packet(&gen_data(1000, true, false, &payload[..], 5, &mut data_packet), &mut output, recv_data) {
-            Ok(RecvResult::Status(_)) => {},
+            Ok(RecvResult::Active) => {},
             o => panic!("{:?}", o)
         }
 
@@ -388,7 +388,7 @@ mod test {
         let mut output = vec!();
 
         match recv.tick(10, &mut output) {
-            Ok(RecvResult::Status(_)) => {},
+            Ok(RecvResult::Active) => {},
             o => panic!("{:?}", o)
         }
 
@@ -423,7 +423,7 @@ mod test {
             output.clear();
 
             match recv.tick(PENDING_REPEAT_MS, &mut output) {
-                Ok(RecvResult::Status(_)) => {},
+                Ok(RecvResult::Active) => {},
                 o => panic!("{:?}", o)
             }
 
@@ -478,7 +478,7 @@ mod test {
             let mut recv = send_to_response(&mut recv_data);
 
             match recv.tick(PENDING_REPEAT_MS, &mut output) {
-                Ok(RecvResult::Status(_)) => {},
+                Ok(RecvResult::Active) => {},
                 o => panic!("{:?}", o)
             }
 
@@ -522,7 +522,7 @@ mod test {
             let decoded = decode(&mut data_packet, true).unwrap();
 
             match recv.on_packet(&decoded, &mut output, &mut recv_data) {
-                Ok(RecvResult::Status(_)) => {},
+                Ok(RecvResult::Active) => {},
                 o => panic!("{:?}", o)
             }
 
@@ -556,7 +556,7 @@ mod test {
             let mut send_packet = &gen_data(1000, true, false, &payload[..], 5, &mut data_packet);
 
             match recv.on_packet(send_packet, &mut output, &mut recv_data) {
-                Ok(RecvResult::Status(_)) => {},
+                Ok(RecvResult::Active) => {},
                 o => panic!("{:?}", o)
             }
 
@@ -573,7 +573,7 @@ mod test {
             output.clear();
 
             match recv.on_packet(send_packet, &mut output, &mut recv_data) {
-                Ok(RecvResult::Status(_)) => {},
+                Ok(RecvResult::Active) => {},
                 o => panic!("{:?}", o)
             }
 
