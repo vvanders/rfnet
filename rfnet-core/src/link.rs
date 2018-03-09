@@ -628,7 +628,7 @@ mod test {
 
         let mut iters = 0;
         let mut response = false;
-        while(iters < 200 && !response) {
+        while iters < 200 && !response {
             iters += 1;
 
             while let Ok(Some(framed)) = send.read_frame() {
@@ -652,7 +652,7 @@ mod test {
 
         iters = 0;
         let mut received = false;
-        while(iters < 100 && !received) {
+        while iters < 100 && !received {
             iters += 1;
 
             while let Ok(Some(framed)) = send.read_frame() {

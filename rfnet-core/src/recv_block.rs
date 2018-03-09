@@ -542,9 +542,6 @@ mod test {
 
     #[test]
     fn test_reack() {
-        use kiss;
-        use framed;
-
         let mut recv_data = vec!();
         let payload = get_payload();
 
@@ -553,7 +550,7 @@ mod test {
 
             let mut output = vec!();
             let mut data_packet = vec!();
-            let mut send_packet = &gen_data(1000, true, false, &payload[..], 5, &mut data_packet);
+            let send_packet = &gen_data(1000, true, false, &payload[..], 5, &mut data_packet);
 
             match recv.on_packet(send_packet, &mut output, &mut recv_data) {
                 Ok(RecvResult::Active) => {},
