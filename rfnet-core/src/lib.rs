@@ -5,6 +5,7 @@ extern crate byteorder;
 extern crate hyper;
 extern crate futures;
 extern crate rand;
+extern crate rust_sodium;
 
 #[cfg(test)]
 extern crate simple_logger;

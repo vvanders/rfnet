@@ -95,8 +95,8 @@ impl Link {
         Ok(res)
     }
 
-    fn build_request(msg: message::RequestMessage) -> Result<hyper::Request, String> {
-        match msg.req_type {
+    fn build_request(env: message::RequestEnvelope) -> Result<hyper::Request, String> {
+        match env.msg.req_type {
             message::RequestType::REST { method, url, headers, body } => {
                 let method = match method {
                     message::RESTMethod::GET => hyper::Method::Get,
@@ -112,7 +112,7 @@ impl Link {
 
                 let mut req = hyper::Request::new(method, url);
 
-                req.headers_mut().append_raw("X-rfnet-signature", msg.signature);
+                req.headers_mut().append_raw("X-rfnet-signature", env.signature);
 
                 //@todo parse + set headers
 
@@ -594,7 +594,6 @@ mod test {
 
         let mut payload = vec!();
         message::encode_request_message(&message::RequestMessage {
-                signature: &[0;64],
                 sequence_id: 1000,
                 addr: "KI7EST@rfnet.net",
                 req_type: message::RequestType::REST {
@@ -603,7 +602,7 @@ mod test {
                     headers: "",
                     body: "Body"
                 }
-            }, &mut payload).unwrap();
+            }, &[0; 64], &mut vec!(), &mut payload).unwrap();
 
         let mut sender = SendBlock::new(payload.len(), 32, Some(1), true, RetryConfig::default(1200));
 

@@ -13,7 +13,7 @@ pub struct Node {
 struct Inner {
     callsign: String,
     config: Option<LinkConfig>,
-    retry_config: RetryConfig,
+    retry_config: RetryConfig
 }
 
 enum State {
@@ -678,5 +678,10 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_no_response() {
+        let mut node = connect();
     }
 }
