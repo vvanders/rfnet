@@ -317,9 +317,19 @@ fn test_verify() {
 
     let mut encode = vec!();
     encode_request_message(&req, &sk.0, &mut vec!(), &mut encode).unwrap();
-    let decoded = decode_request_message(&encode[..]).unwrap();
+    {
+        let decoded = decode_request_message(&encode[..]).unwrap();
+        assert!(verify_envelope(&decoded, &pk.0));
+    }
 
-    verify_envelope(&decoded, &pk.0);
+    {
+        //Flip sequence id
+        let offset = 64 + callsign.len() + 1;
+        encode[offset] = !encode[offset];
+
+        let decoded = decode_request_message(&encode[..]).unwrap();
+        assert!(!verify_envelope(&decoded, &pk.0));
+    }
 }
 
 #[test]
