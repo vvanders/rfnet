@@ -123,6 +123,9 @@ impl Node {
         ClientState::translate(&self.state)
     }
 
+    pub fn get_link(&self) -> &Option<LinkConfig> {
+        &self.inner.config
+    }
 
     fn handle_event<P,R,W,E>(&mut self, event: Event<R,W>, packet_writer: &mut P, mut event_handler: E) -> io::Result<()>
             where P: FramedWrite, R: io::Read, W: io::Write, E: FnMut(ClientEvent) {
@@ -639,9 +642,6 @@ mod test {
 
     #[test]
     fn test_connect_fail() {
-        use simple_logger;
-        simple_logger::init();
-
         let mut node = Node::new("KI7EST".to_string(), Some(get_default_config()), RetryConfig::default(1200));
         let mut packet_writer = vec!();
         node.tick(LISTEN_TIMEOUT, &mut packet_writer, |_| {}).unwrap();
@@ -682,6 +682,88 @@ mod test {
 
     #[test]
     fn test_no_response() {
+        use simple_logger;
+        simple_logger::init();
+
+        use request_response::*;
+        use packet;
+        use message::RESTMethod;
+        use recv_block::*;
+        use framed::{FramedRead, KISSFramed, LoopbackIo};
+
         let mut node = connect();
+        let mut rr = RequestResponse::new();
+
+        let mut recv_block = RecvBlock::new(true);
+        let mut recv_data = vec!();
+        let mut recv_complete = false;
+
+        let mut send = KISSFramed::new(LoopbackIo::new(), 0);
+        let mut recv = KISSFramed::new(LoopbackIo::new(), 0);
+
+        let mut send_complete = false;
+
+        {
+            let mut event_handler = |e| {
+                match e {
+                    ClientEvent::ResponseComplete => send_complete = true,
+                    ClientEvent::StateChange(old, new) => {
+                        match old { 
+                            ClientState::Established | ClientState::Sending | ClientState::Receiving => {},
+                            o => assert!(false, "{:?}", o)
+                        }
+
+                        match new { 
+                            ClientState::Established | ClientState::Sending | ClientState::Receiving => {},
+                            o => assert!(false, "{:?}", o)
+                        }
+                    }
+                    o => assert!(false, "{:?}", o)
+                }
+            };
+
+            rr.new_request(
+                (1,0),
+                "KI7EST@rfnet.net",
+                0,
+                RESTMethod::GET,
+                "http://www.rfnet.net/test", 
+                "", 
+                "BODY",
+                &[0;64]).unwrap();
+
+            let data_len = rr.request.get_data().len();
+            node.start_request(&mut rr.request, data_len, &mut send, &mut event_handler).unwrap();
+
+            for _ in 0..100 {
+                if let Ok(Some(frame)) = recv.read_frame() {
+                    if let Ok(ref packet) = packet::decode(frame, true) {
+                        node.on_data(packet, &mut send, &mut rr.response, &mut rr.request, &mut event_handler).unwrap();
+                    } else {
+                        node.on_other_data(&mut send, &mut event_handler).unwrap();
+                    }
+
+                    node.tick(100, &mut send, &mut event_handler).unwrap();
+                }
+
+                if let Ok(Some(frame)) = send.read_frame() {
+                    let packet = packet::decode(frame, true).unwrap();
+                    match recv_block.on_packet(&packet, &mut recv, &mut recv_data).unwrap() {
+                        RecvResult::Active => {},
+                        RecvResult::CompleteSendResponse => match recv_block.send_response(false, &mut recv).unwrap() {
+                            RecvResult::Complete => recv_complete = true,
+                            _ => {}
+                        },
+                        RecvResult::Complete => recv_complete = true
+                    }
+
+                    recv_block.tick(100, &mut recv).unwrap();
+                }
+            }
+        }
+
+        assert!(send_complete);
+        assert!(recv_complete);
+        assert_eq!(rr.request.get_data(), &recv_data[..]);
     }
 }
