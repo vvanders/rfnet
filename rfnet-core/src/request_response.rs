@@ -85,6 +85,10 @@ impl ResponseReceiver {
     pub fn decode(&mut self) -> io::Result<message::ResponseMessage> {
         message::decode_response_message(&self.buffer[..])
     }
+
+    pub fn get_data(&self) -> &[u8] { 
+        &self.buffer
+    }
 }
 
 impl RequestBuilder {

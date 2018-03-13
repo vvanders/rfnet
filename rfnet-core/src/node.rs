@@ -682,9 +682,6 @@ mod test {
 
     #[test]
     fn test_no_response() {
-        use simple_logger;
-        simple_logger::init();
-
         use request_response::*;
         use packet;
         use message::RESTMethod;
@@ -765,5 +762,117 @@ mod test {
         assert!(send_complete);
         assert!(recv_complete);
         assert_eq!(rr.request.get_data(), &recv_data[..]);
+        assert_eq!(node.get_state(), ClientState::Established);
+    }
+
+    #[test]
+    fn test_response() {
+        use request_response::*;
+        use packet;
+        use message::RESTMethod;
+        use recv_block::*;
+        use send_block::*;
+        use framed::{FramedRead, KISSFramed, LoopbackIo};
+
+        let mut node = connect();
+        let mut rr = RequestResponse::new();
+
+        let mut recv_block = RecvBlock::new(true);
+        let mut recv_data = vec!();
+        let mut recv_started = false;
+        let mut recv_complete = false;
+
+        let response_data = (0..100).collect::<Vec<u8>>();
+        let mut send_block = SendBlock::new(response_data.len(), 32, Some(0), true, RetryConfig::default(1200));
+        let mut response_reader = io::Cursor::new(&response_data[..]);
+
+        let mut send = KISSFramed::new(LoopbackIo::new(), 0);
+        let mut recv = KISSFramed::new(LoopbackIo::new(), 0);
+
+        let mut send_complete = false;
+
+        {
+            let mut event_handler = |e| {
+                match e {
+                    ClientEvent::ResponseComplete => send_complete = true,
+                    ClientEvent::StateChange(old, new) => {
+                        match old { 
+                            ClientState::Established | ClientState::Sending | ClientState::Receiving => {},
+                            o => assert!(false, "{:?}", o)
+                        }
+
+                        match new { 
+                            ClientState::Established | ClientState::Sending | ClientState::Receiving => {},
+                            o => assert!(false, "{:?}", o)
+                        }
+                    }
+                    o => assert!(false, "{:?}", o)
+                }
+            };
+
+            rr.new_request(
+                (1,0),
+                "KI7EST@rfnet.net",
+                0,
+                RESTMethod::GET,
+                "http://www.rfnet.net/test", 
+                "", 
+                "BODY",
+                &[0;64]).unwrap();
+
+            let data_len = rr.request.get_data().len();
+            node.start_request(&mut rr.request, data_len, &mut send, &mut event_handler).unwrap();
+
+            for _ in 0..100 {
+                if let Ok(Some(frame)) = recv.read_frame() {
+                    if let Ok(ref packet) = packet::decode(frame, true) {
+                        node.on_data(packet, &mut send, &mut rr.response, &mut rr.request, &mut event_handler).unwrap();
+                    } else {
+                        node.on_other_data(&mut send, &mut event_handler).unwrap();
+                    }
+
+                    node.tick(100, &mut send, &mut event_handler).unwrap();
+                }
+
+                if let Ok(Some(frame)) = send.read_frame() {
+                    let packet = packet::decode(frame, true).unwrap();
+
+                    if !recv_started {
+                        let mut start_send = false;
+
+                        match recv_block.on_packet(&packet, &mut recv, &mut recv_data).unwrap() {
+                            RecvResult::Active => {},
+                            RecvResult::CompleteSendResponse => match recv_block.send_response(true, &mut recv).unwrap() {
+                                RecvResult::Complete => start_send = true,
+                                _ => {}
+                            },
+                            RecvResult::Complete => start_send = true,
+                        }
+
+                        if start_send {
+                            recv_started = true;
+                            send_block.send(&mut recv, &mut response_reader).unwrap();
+                        } else {
+                            recv_block.tick(100, &mut recv).unwrap();
+                        }
+                    } else {
+                        match send_block.on_packet(&packet.0, &mut recv, &mut response_reader).unwrap() {
+                            SendResult::Active => {},
+                            SendResult::CompleteNoResponse => recv_complete = true,
+                            SendResult::CompleteResponse => assert!(false),
+                            SendResult::PendingResponse => {}
+                        }
+
+                        send_block.tick(100, &mut recv).unwrap();
+                    }
+                }
+            }
+        }
+
+        assert!(recv_complete);
+        assert!(send_complete);
+        assert_eq!(rr.response.get_data(), &response_data[..]);
+        assert_eq!(rr.request.get_data(), &recv_data[..]);
+        assert_eq!(node.get_state(), ClientState::Established);
     }
 }
