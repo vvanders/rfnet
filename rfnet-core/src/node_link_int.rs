@@ -4,6 +4,7 @@ use link::{Link, HttpProvider};
 use send_block::RetryConfig;
 use message::{RESTMethod, ResponseMessage, ResponseType};
 use request_response::RequestResponse;
+use kiss;
 
 use hyper;
 
@@ -145,8 +146,55 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R)
 
 #[test]
 fn send_recv_full() {
-    use simple_logger;
-    simple_logger::init();
-
     cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
+}
+
+#[test]
+fn send_send_alt() {
+    cycle_data(
+        |idx, sidx, data|
+            if sidx % 2 == 1 {
+                data.clear();
+            },
+        |idx, ridx, data| {});
+}
+
+#[test]
+fn send_recv_alt() {
+    cycle_data(
+        |idx, sidx, data| {},
+        |idx, ridx, data| 
+            if ridx % 2 == 1 {
+                data.clear();
+            });
+}
+
+#[test]
+fn send_flip() {
+    cycle_data(|idx, sidx, data| {
+        let mut decode_data = vec!();
+        let decoded = kiss::decode(data.iter().cloned(), &mut decode_data);
+
+        let idx = sidx % decode_data.len();
+        decode_data[idx] = !decode_data[idx];
+
+        data.clear();
+        kiss::encode(io::Cursor::new(&decode_data[..]), data, 0);
+    }, |idx, ridx, data| {});
+}
+
+#[test]
+fn recv_flip() {
+    cycle_data(
+        |idx, sidx, data| {},
+        |idx, ridx, data| {
+            let mut decode_data = vec!();
+            let decoded = kiss::decode(data.iter().cloned(), &mut decode_data);
+
+            let idx = ridx % decode_data.len();
+            decode_data[idx] = !decode_data[idx];
+
+            data.clear();
+            kiss::encode(io::Cursor::new(&decode_data[..]), data, 0);
+        });
 }
