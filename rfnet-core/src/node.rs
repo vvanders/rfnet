@@ -2,6 +2,7 @@ use packet::*;
 use framed::FramedWrite;
 use send_block::{SendBlock, RetryConfig, SendError, SendResult};
 use recv_block::{RecvBlock, RecvResult, RecvError};
+use packet;
 
 use std::io;
 
@@ -32,6 +33,7 @@ struct NegotiatingState {
 
 enum Event<'a,R,W> where R: 'a + io::Read, W: 'a + io::Write {
     Connect,
+    Disconnect,
     StartRequest { data_size: usize, request_reader: &'a mut R },
     Data { packet: &'a (Packet<'a>, usize), request_reader: &'a mut R, response_writer: &'a mut W },
     OtherData,
@@ -42,6 +44,7 @@ impl<'a,R,W> ::std::fmt::Debug for Event<'a,R,W> where R: 'a + io::Read, W: 'a +
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
         match self {
             &Event::Connect => write!(f, "Connect"),
+            &Event::Disconnect => write!(f, "Disconnect"),
             &Event::StartRequest { .. } => write!(f, "StartRequest"),
             &Event::OtherData => write!(f, "OtherData"),
             &Event::Data { .. } => write!(f, "Data"),
@@ -50,6 +53,7 @@ impl<'a,R,W> ::std::fmt::Debug for Event<'a,R,W> where R: 'a + io::Read, W: 'a +
     }
 }
 
+#[derive(Debug,PartialEq)]
 pub struct LinkConfig {
     pub fec_enabled: bool,
     pub retry_enabled: bool,
@@ -127,15 +131,15 @@ impl Node {
         &self.inner.config
     }
 
-    fn handle_event<P,R,W,E>(&mut self, event: Event<R,W>, packet_writer: &mut P, mut event_handler: E) -> io::Result<()>
+    fn handle_event<P,R,W,E>(&mut self, event: Event<R,W>, packet_writer: &mut P, event_handler: &mut E) -> io::Result<()>
             where P: FramedWrite, R: io::Read, W: io::Write, E: FnMut(ClientEvent) {
         let new_state = match &mut self.state {
-            &mut State::Listening { ref mut idle } => self.inner.handle_listening(idle, event, packet_writer, &mut event_handler)?,
-            &mut State::Idle => self.inner.handle_idle(event, packet_writer, &mut event_handler)?,
-            &mut State::Negotiating(ref mut state) => self.inner.handle_negotiating(state, event, packet_writer, &mut event_handler)?,
-            &mut State::Established { ref mut idle } => self.inner.handle_established(idle, event, packet_writer, &mut event_handler)?,
-            &mut State::SendingRequest { ref mut send } => self.inner.handle_send(send, event, packet_writer, &mut event_handler)?,
-            &mut State::ReceivingResponse { ref mut recv } => self.inner.handle_recv(recv, event, packet_writer, &mut event_handler)?
+            &mut State::Listening { ref mut idle } => self.inner.handle_listening(idle, event, packet_writer, event_handler)?,
+            &mut State::Idle => self.inner.handle_idle(event, packet_writer, event_handler)?,
+            &mut State::Negotiating(ref mut state) => self.inner.handle_negotiating(state, event, packet_writer, event_handler)?,
+            &mut State::Established { ref mut idle } => self.inner.handle_established(idle, event, packet_writer, event_handler)?,
+            &mut State::SendingRequest { ref mut send } => self.inner.handle_send(send, event, packet_writer, event_handler)?,
+            &mut State::ReceivingResponse { ref mut recv } => self.inner.handle_recv(recv, event, packet_writer, event_handler)?
         };
 
         if let Some(new_state) = new_state {
@@ -148,26 +152,63 @@ impl Node {
         Ok(())
     }
 
-    pub fn start_request<R,W,E>(&mut self, request_reader: &mut R, data_size: usize, packet_writer: &mut W, event_handler: E) -> io::Result<()>
+    pub fn start_request<R,W,E>(&mut self, request_reader: &mut R, data_size: usize, packet_writer: &mut W, mut event_handler: E) -> io::Result<()>
             where R: io::Read, W: FramedWrite, E: FnMut(ClientEvent) {
-        self.handle_event::<_,_,Vec<u8>,_>(Event::StartRequest { request_reader, data_size }, packet_writer, event_handler)
+        self.handle_event::<_,_,Vec<u8>,_>(Event::StartRequest { request_reader, data_size }, packet_writer, &mut event_handler)
     }
 
-    pub fn connect<W,E>(&mut self, packet_writer: &mut W, event_handler: E) -> io::Result<()> where W: FramedWrite, E: FnMut(ClientEvent) {
-        self.handle_event::<_,io::Cursor<&[u8]>,Vec<u8>,_>(Event::Connect, packet_writer, event_handler)
+    pub fn connect<W,E>(&mut self, packet_writer: &mut W, mut event_handler: E) -> io::Result<()> where W: FramedWrite, E: FnMut(ClientEvent) {
+        self.handle_event::<_,io::Cursor<&[u8]>,Vec<u8>,_>(Event::Connect, packet_writer, &mut event_handler)
     }
 
-    pub fn on_data<P,W,R,E>(&mut self, packet: &(Packet, usize), packet_writer: &mut P, response_writer: &mut W, request_reader: &mut R, event_handler: E) -> io::Result<()> 
+    pub fn disconnect<W,E>(&mut self, packet_writer: &mut W, mut event_handler: E) -> io::Result<()> where W: FramedWrite, E: FnMut(ClientEvent) {
+        self.handle_event::<_,io::Cursor<&[u8]>,Vec<u8>,_>(Event::Disconnect, packet_writer, &mut event_handler)
+    }
+
+    pub fn on_data<P,W,R,E>(&mut self, data: &mut [u8], packet_writer: &mut P, response_writer: &mut W, request_reader: &mut R, mut event_handler: E) -> io::Result<()> 
             where P: FramedWrite, W: io::Write, R: io::Read, E: FnMut(ClientEvent) {
-        self.handle_event(Event::Data { packet, request_reader, response_writer }, packet_writer, event_handler)
+        //Grab a ref so we don't move the value when we use it multiple times
+        let event_handler = &mut event_handler;
+
+        let handled = if let Some(fec) = self.inner.config.as_ref().map(|c| c.fec_enabled) {
+            if let Ok(packet) = packet::decode(data, fec) {
+                self.handle_event(Event::Data { packet: &packet, request_reader, response_writer }, packet_writer, event_handler)?;
+                true
+            } else {
+                false
+            }
+        } else {
+            //Try with FEC first
+            let handled = {
+                if let Ok(packet) = packet::decode(data, true) {
+                    self.handle_event(Event::Data { packet: &packet, request_reader, response_writer }, packet_writer, event_handler)?;
+                    true
+                } else {
+                    false
+                }
+            };
+            
+            if !handled {
+                if let Ok(packet) = packet::decode(data, false) {
+                    self.handle_event(Event::Data { packet: &packet, request_reader, response_writer }, packet_writer, event_handler)?;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                true
+            }
+        };
+
+        if !handled {
+            self.handle_event::<_,io::Cursor<&[u8]>,Vec<u8>,_>(Event::OtherData, packet_writer, event_handler)
+        } else {
+            Ok(())
+        }
     }
 
-    pub fn on_other_data<P,E>(&mut self, packet_writer: &mut P, event_handler: E) -> io::Result<()> where P: FramedWrite, E: FnMut(ClientEvent) {
-        self.handle_event::<_,io::Cursor<&[u8]>,Vec<u8>,_>(Event::OtherData, packet_writer, event_handler)
-    }
-
-    pub fn tick<W,E>(&mut self, ms: usize, packet_writer: &mut W, handle_event: E) -> io::Result<()> where W: FramedWrite, E: FnMut(ClientEvent) {
-        self.handle_event::<_,io::Cursor<&[u8]>,Vec<u8>,_>(Event::Tick { ms }, packet_writer, handle_event)
+    pub fn tick<W,E>(&mut self, ms: usize, packet_writer: &mut W, mut handle_event: E) -> io::Result<()> where W: FramedWrite, E: FnMut(ClientEvent) {
+        self.handle_event::<_,io::Cursor<&[u8]>,Vec<u8>,_>(Event::Tick { ms }, packet_writer, &mut handle_event)
     }
 }
 
@@ -254,7 +295,8 @@ impl Inner {
                     None => Some(State::Negotiating(NegotiatingState { last_attempt: 0, retry_count: 0 })),
                     o => o
                 }
-            }
+            },
+            Event::Tick { .. } => None,
             e => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("Unsupported event {:?} for Idle state", e)))
         };
 
@@ -398,7 +440,20 @@ impl Inner {
                             None
                         }
                     })
-                }
+                },
+                Event::Disconnect => {
+                    let packet = Packet::Control(ControlPacket {
+                        source_callsign: self.callsign.as_bytes(),
+                        dest_callsign: config.callsign.as_bytes(),
+                        ctrl_type: ControlType::LinkClose
+                    });
+
+                    packet_writer.start_frame()?;
+                    encode(&packet, config.fec_enabled, packet_writer)?;
+                    packet_writer.end_frame()?;
+
+                    Ok(None)
+                },
                 e => return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("Unsupported event {:?} for Established state", e)))
             }
         } else {
@@ -456,6 +511,13 @@ impl Inner {
 mod test {
     use super::*;
 
+    fn encode_packet(packet: &Packet, fec: bool) -> Vec<u8> {
+        let mut data = vec!();
+        packet::encode(packet, fec, &mut data).unwrap();
+
+        data
+    }
+
     #[test]
     fn test_broadcast() {
         let mut node = Node::new("KI7EST".to_string(), None, RetryConfig::default(1200));
@@ -477,10 +539,56 @@ mod test {
 
         let mut response_writer = vec!();
         let mut request_reader = io::Cursor::new(&[]);
-        node.on_data(&(broadcast, 0), &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
+
+        node.on_data(&mut encode_packet(&broadcast, true)[..], &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
             assert_eq!(e, ClientEvent::StateChange(ClientState::Listening, ClientState::Idle));
         }).unwrap();
         assert_eq!(node.get_state(), ClientState::Idle);
+    }
+
+    #[test]
+    fn test_fec_mismatch() {
+        let broadcast = Packet::Broadcast(BroadcastPacket {
+            fec_enabled: true,
+            retry_enabled: true,
+            major_ver: 1,
+            minor_ver: 1,
+            link_width: 32,
+            callsign: "KI7EST".as_bytes(),
+        });
+
+        let expected = LinkConfig {
+            fec_enabled: true,
+            retry_enabled: true,
+            major_ver: 1,
+            minor_ver: 1,
+            link_width: 32,
+            callsign: "KI7EST".to_string()
+        };
+
+        let mut packet_writer = vec!();
+        let mut response_writer = vec!();
+        let mut request_reader = io::Cursor::new(&[]);
+
+        {
+            let mut node = Node::new("KI7EST".to_string(), None, RetryConfig::default(1200));
+
+            node.on_data(&mut encode_packet(&broadcast, true)[..], &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
+                assert_eq!(e, ClientEvent::StateChange(ClientState::Listening, ClientState::Idle));
+            }).unwrap();
+            assert_eq!(node.get_state(), ClientState::Idle);
+            assert_eq!(node.get_link().as_ref().unwrap(), &expected);
+        }
+
+        {
+            let mut node = Node::new("KI7EST".to_string(), None, RetryConfig::default(1200));
+
+            node.on_data(&mut encode_packet(&broadcast, false)[..], &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
+                assert_eq!(e, ClientEvent::StateChange(ClientState::Listening, ClientState::Idle));
+            }).unwrap();
+            assert_eq!(node.get_state(), ClientState::Idle);
+            assert_eq!(node.get_link().as_ref().unwrap(), &expected);
+        }
     }
 
     fn get_default_config() -> LinkConfig {
@@ -521,7 +629,7 @@ mod test {
         let mut request_reader = io::Cursor::new(&[]);
 
         assert_eq!(node.get_state(), ClientState::Listening);
-        node.on_data(&(clear, 0), &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
+        node.on_data(&mut encode_packet(&clear, true), &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
             assert_eq!(e, ClientEvent::StateChange(ClientState::Listening, ClientState::Idle));
         }).unwrap();
         assert_eq!(node.get_state(), ClientState::Idle)
@@ -533,8 +641,11 @@ mod test {
         let mut packet_writer = vec!();
         node.tick(LISTEN_TIMEOUT, &mut packet_writer, |_| {}).unwrap();
 
+        let mut response_writer = vec!();
+        let mut request_reader = io::Cursor::new(&[]);
+
         assert_eq!(node.get_state(), ClientState::Idle);
-        node.on_other_data(&mut packet_writer, |e| {
+        node.on_data(&mut [0;8], &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
             assert_eq!(e, ClientEvent::StateChange(ClientState::Idle, ClientState::Listening));
         }).unwrap();
 
@@ -575,7 +686,7 @@ mod test {
         let mut response_writer = vec!();
         let mut request_reader = io::Cursor::new(&[]);
         let mut event_idx = 0;
-        node.on_data(&(response, 0), &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
+        node.on_data(&mut encode_packet(&response, true)[..], &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
             match event_idx {
                 0 => assert_eq!(e, ClientEvent::Connected),
                 1 => assert_eq!(e, ClientEvent::StateChange(ClientState::Negotiating, ClientState::Established)),
@@ -614,6 +725,25 @@ mod test {
     }
 
     #[test]
+    fn test_send_disconnect() {
+        let mut node = connect();
+        let mut packet_writer = vec!();
+
+        node.disconnect(&mut packet_writer, |_| {
+            assert!(false);
+        }).unwrap();
+
+        let expected = Packet::Control(ControlPacket {
+            source_callsign: "KI7EST".as_bytes(),
+            dest_callsign: "KI7EST".as_bytes(),
+            ctrl_type: ControlType::LinkClose
+        });
+
+        let decoded = packet::decode(&mut packet_writer[..], true).unwrap();
+        assert_eq!(decoded, (expected, 0));
+    }
+
+    #[test]
     fn test_disconnect() {
         let mut node = connect();
         let mut packet_writer = vec!();
@@ -627,7 +757,7 @@ mod test {
         let mut response_writer = vec!();
         let mut request_reader = io::Cursor::new(&[]);
         let mut event_idx = 0;
-        node.on_data(&(disconnect, 0), &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
+        node.on_data(&mut encode_packet(&disconnect, true)[..], &mut packet_writer, &mut response_writer, &mut request_reader, |e| {
             match event_idx {
                 0 => assert_eq!(e, ClientEvent::Disconnected),
                 1 => assert_eq!(e, ClientEvent::StateChange(ClientState::Established, ClientState::Idle)),
@@ -734,12 +864,7 @@ mod test {
 
             for _ in 0..100 {
                 if let Ok(Some(frame)) = recv.read_frame() {
-                    if let Ok(ref packet) = packet::decode(frame, true) {
-                        node.on_data(packet, &mut send, &mut rr.response, &mut rr.request, &mut event_handler).unwrap();
-                    } else {
-                        node.on_other_data(&mut send, &mut event_handler).unwrap();
-                    }
-
+                    node.on_data(frame, &mut send, &mut rr.response, &mut rr.request, &mut event_handler).unwrap();
                     node.tick(100, &mut send, &mut event_handler).unwrap();
                 }
 
@@ -825,12 +950,7 @@ mod test {
 
             for _ in 0..100 {
                 if let Ok(Some(frame)) = recv.read_frame() {
-                    if let Ok(ref packet) = packet::decode(frame, true) {
-                        node.on_data(packet, &mut send, &mut rr.response, &mut rr.request, &mut event_handler).unwrap();
-                    } else {
-                        node.on_other_data(&mut send, &mut event_handler).unwrap();
-                    }
-
+                    node.on_data(frame, &mut send, &mut rr.response, &mut rr.request, &mut event_handler).unwrap();
                     node.tick(100, &mut send, &mut event_handler).unwrap();
                 }
 

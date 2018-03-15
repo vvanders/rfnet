@@ -113,8 +113,21 @@ impl Link {
                 let mut req = hyper::Request::new(method, url);
 
                 req.headers_mut().append_raw("X-rfnet-signature", env.signature);
+                req.headers_mut().append_raw("X-rfnet-sequence_id", format!("{}", env.msg.sequence_id));
 
-                //@todo parse + set headers
+                for header in headers.lines() {
+                    let mut parsed = header.splitn(2, ":");
+                    use ::std::iter::Iterator;
+                    if let Some(key) = parsed.next() {
+                        if let Some(value) = parsed.next() {
+                            req.headers_mut().append_raw(key.trim().to_string(), value.trim().to_string());
+                        } else {
+                            return Err(format!("Malformed header {}", header))
+                        }
+                    } else {
+                        return Err(format!("Malformed header {}", header))
+                    }
+                }
 
                 req.set_body(body.to_string());
 
@@ -599,7 +612,7 @@ mod test {
                 req_type: message::RequestType::REST {
                     method: message:: RESTMethod::GET,
                     url: "http://rfnet.net/test",
-                    headers: "",
+                    headers: "header1: foo\r\nheader2: bar",
                     body: "Body"
                 }
             }, &[0; 64], &mut vec!(), &mut payload).unwrap();
@@ -617,6 +630,13 @@ mod test {
 
         impl HttpProvider for HttpResponse {
             fn request(&mut self, request: hyper::Request) -> Result<hyper::Response, hyper::Error> {
+                use hyper::header;
+
+                assert_eq!(request.headers().get_raw("header1"), Some(&header::Raw::from("foo")));
+                assert_eq!(request.headers().get_raw("header2"), Some(&header::Raw::from("bar")));
+                assert_eq!(request.headers().get_raw("X-rfnet-sequence_id"), Some(&header::Raw::from("1000")));
+                assert!(request.headers().get_raw("X-rfnet-signature").is_some());
+
                 Ok(hyper::Response::new()
                     .with_status(hyper::StatusCode::Ok)
                     .with_body("Test"))

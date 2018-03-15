@@ -23,6 +23,8 @@ mod request_response;
 
 #[cfg(test)]
 mod send_recv_int;
+#[cfg(test)]
+mod node_link_int;
 
 const MAJOR_VER: u8 = 0;
 const MINOR_VER: u8 = 1;
