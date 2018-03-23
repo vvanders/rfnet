@@ -239,7 +239,7 @@ fn get_fec_bytes(fec_count: u8) -> usize {
 
 fn encode_fec<'a,T>(packet: &Packet<'a>, writer: &mut T) -> io::Result<usize> where T: Write {
     match packet {
-        &Packet::Data(ref header, ref content) => {
+        &Packet::Data(ref _header, ref _content) => {
             panic!("Data should be encoded with encode_data");
         },
         _ => {
@@ -724,7 +724,7 @@ mod test {
             }
         }
 
-        for i in 0..16384 {
+        for _ in 0..16384 {
             verify_packet(Packet::Control(ControlPacket {
                 ctrl_type: ControlType::LinkRequest,
                 source_callsign: &[1],
@@ -842,10 +842,10 @@ mod test {
         verify_data_packet(&packet, &data[..], false, size);
     }
 
-    fn verify_data_packet(packet: &DataPacket, data: &[u8], fec: bool, size: usize) {
+    fn verify_data_packet(packet: &DataPacket, data: &[u8], fec: bool, _size: usize) {
         let mut scratch = vec!();
 
-        let (written, data_written, eof) = encode_data(packet.clone(), fec, 4096, &mut Cursor::new(data), &mut scratch).unwrap();
+        let (written, _data_written, _eof) = encode_data(packet.clone(), fec, 4096, &mut Cursor::new(data), &mut scratch).unwrap();
         assert_eq!(written, scratch.len());
 
         //FEC tests takes considerable time so only test in release

@@ -14,16 +14,15 @@ pub trait FramedWrite : io::Write {
     }
 }
 
-pub trait FramedRead {
-    fn read_frame<'a>(&'a mut self) -> io::Result<Option<&'a mut [u8]>>;
+pub trait FramedRead<T> {
+    fn read_frame<'a>(&mut self, read_cache: &'a mut T) -> io::Result<Option<&'a mut [u8]>>;
 }
 
 pub struct KISSFramed<T> where T: io::Write + io::Read {
     kiss_tnc: T,
     port: u8,
     pending_frame: Vec<u8>, //@todo: Stream this via io::Write
-    pending_recv: Vec<u8>,
-    recv_frame: Vec<u8>
+    pending_recv: Vec<u8>
 }
 
 impl<T> KISSFramed<T> where T: io::Write + io::Read {
@@ -32,12 +31,15 @@ impl<T> KISSFramed<T> where T: io::Write + io::Read {
             kiss_tnc,
             port,
             pending_frame: vec!(),
-            pending_recv: vec!(),
-            recv_frame: vec!()
+            pending_recv: vec!()
         }
     }
 
-    pub fn get_tnc(&mut self) -> &mut T {
+    pub fn get_tnc(&self) -> &T {
+        &self.kiss_tnc
+    }
+
+    pub fn get_tnc_mut(&mut self) -> &mut T {
         &mut self.kiss_tnc
     }
 }
@@ -57,8 +59,8 @@ impl<T> FramedWrite for KISSFramed<T> where T: io::Write + io::Read {
     }
 }
 
-impl<T> FramedRead for KISSFramed<T> where T: io::Write + io::Read {
-    fn read_frame<'a>(&'a mut self) -> io::Result<Option<&'a mut [u8]>> {
+impl<T> FramedRead<Vec<u8>> for KISSFramed<T> where T: io::Write + io::Read {
+    fn read_frame<'a>(&mut self, recv_buffer: &'a mut Vec<u8>) -> io::Result<Option<&'a mut [u8]>> {
         loop {
             let mut scratch: [u8; 256] = unsafe { ::std::mem::uninitialized() };
             match self.kiss_tnc.read(&mut scratch) {
@@ -71,10 +73,10 @@ impl<T> FramedRead for KISSFramed<T> where T: io::Write + io::Read {
             }
         }
 
-        self.recv_frame.clear();
-        if let Some(decoded) = kiss::decode(self.pending_recv.iter().cloned(), &mut self.recv_frame) {
+        recv_buffer.clear();
+        if let Some(decoded) = kiss::decode(self.pending_recv.iter().cloned(), recv_buffer) {
             self.pending_recv.drain(..decoded.bytes_read);
-            Ok(Some(&mut self.recv_frame[..]))
+            Ok(Some(&mut recv_buffer[..]))
         } else {
             Ok(None)
         }
@@ -141,16 +143,17 @@ impl FramedWrite for Vec<u8> {
 #[test]
 fn test_encode_decode() {
     let data = (0..256).map(|v| v as u8).collect::<Vec<u8>>();
+    let mut recv_buffer = vec!();
 
     let mut framed = KISSFramed::new(LoopbackIo::new(), 0);
 
     framed.write_frame(&data[..]).unwrap();
-    assert_eq!(framed.read_frame().unwrap().unwrap(), &data[..]);
-    assert!(framed.read_frame().unwrap().is_none());
+    assert_eq!(framed.read_frame(&mut recv_buffer).unwrap().unwrap(), &data[..]);
+    assert!(framed.read_frame(&mut recv_buffer).unwrap().is_none());
 
     framed.write_frame(&data[..]).unwrap();
     framed.write_frame(&data[..]).unwrap();
-    assert_eq!(framed.read_frame().unwrap().unwrap(), &data[..]);
-    assert_eq!(framed.read_frame().unwrap().unwrap(), &data[..]);
-    assert!(framed.read_frame().unwrap().is_none());
+    assert_eq!(framed.read_frame(&mut recv_buffer).unwrap().unwrap(), &data[..]);
+    assert_eq!(framed.read_frame(&mut recv_buffer).unwrap().unwrap(), &data[..]);
+    assert!(framed.read_frame(&mut recv_buffer).unwrap().is_none());
 }

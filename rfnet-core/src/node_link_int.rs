@@ -11,15 +11,11 @@ use hyper;
 use std::io;
 
 fn cycle_node<F,R,W>(node: &mut Node, send_channel: &mut F, recv_channel: &mut F, request_reader: &mut R, request_size: usize, response_writer: &mut W) -> bool
-        where F: FramedWrite + FramedRead, R: io::Read, W: io::Write {
-    // let data_len = rr.request.get_data().len();
-    // node.start_request(&mut rr.request, data_len, &mut send_chan, |e| {
-
-    // }).unwrap();
-
+        where F: FramedWrite + FramedRead<Vec<u8>>, R: io::Read, W: io::Write {
     let mut resp_complete = false;
     let mut connect = false;
     let mut start_req = false;
+    let mut recv_frame = vec!();
     {
         let mut event_handler = |e| {
             match e {
@@ -31,7 +27,7 @@ fn cycle_node<F,R,W>(node: &mut Node, send_channel: &mut F, recv_channel: &mut F
             }
         };
 
-        if let Ok(Some(frame)) = recv_channel.read_frame() {
+        if let Ok(Some(frame)) = recv_channel.read_frame(&mut recv_frame) {
             node.on_data(frame, send_channel, response_writer, request_reader, &mut event_handler).unwrap();
         }
         node.tick(100, send_channel, &mut event_handler).unwrap();
@@ -52,13 +48,13 @@ fn cycle_node<F,R,W>(node: &mut Node, send_channel: &mut F, recv_channel: &mut F
     resp_complete
 }
 
-fn cycle_link<F>(link: &mut Link, send_channel: &mut F, recv_channel: &mut F) where F: FramedWrite + FramedRead {
+fn cycle_link<F>(link: &mut Link, send_channel: &mut F, recv_channel: &mut F) where F: FramedWrite + FramedRead<Vec<u8>> {
     struct MockHttp {
     }
 
     impl HttpProvider for MockHttp {
-        fn request(&mut self, request: hyper::Request) -> Result<hyper::Response, hyper::Error> {
-            let mut response = hyper::Response::new()
+        fn request(&mut self, _request: hyper::Request) -> Result<hyper::Response, hyper::Error> {
+            let response = hyper::Response::new()
                 .with_status(hyper::StatusCode::Ok)
                 .with_body("Response");
 
@@ -68,7 +64,8 @@ fn cycle_link<F>(link: &mut Link, send_channel: &mut F, recv_channel: &mut F) wh
 
     let mut http = MockHttp {};
 
-    if let Ok(Some(frame)) = send_channel.read_frame() {
+    let mut recv_frame = vec!();
+    if let Ok(Some(frame)) = send_channel.read_frame(&mut recv_frame) {
         link.recv_data(frame, recv_channel, &mut http).unwrap();
     }
 
@@ -112,18 +109,18 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R)
             let request_size = rr.request.get_data().len();
             response_complete |= cycle_node(&mut node, &mut send_chan, &mut recv_chan, &mut rr.request, request_size, &mut rr.response);
 
-            if recv_chan.get_tnc().buffer_mut().len() > 0 {
+            if recv_chan.get_tnc_mut().buffer_mut().len() > 0 {
                 send_idx += 1;
 
-                drop_send_fn(i, send_idx, recv_chan.get_tnc().buffer_mut());
+                drop_send_fn(i, send_idx, recv_chan.get_tnc_mut().buffer_mut());
             }
 
             cycle_link(&mut link, &mut send_chan, &mut recv_chan);
 
-            if send_chan.get_tnc().buffer_mut().len() > 0 {
+            if send_chan.get_tnc_mut().buffer_mut().len() > 0 {
                 recv_idx += 1;
 
-                drop_recv_fn(i, recv_idx, send_chan.get_tnc().buffer_mut());
+                drop_recv_fn(i, recv_idx, send_chan.get_tnc_mut().buffer_mut());
             }
 
             if response_complete {
@@ -146,24 +143,24 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R)
 
 #[test]
 fn send_recv_full() {
-    cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
+    cycle_data(|_idx, _sidx, _data| {}, |_idx, _ridx, _data| {});
 }
 
 #[test]
 fn send_send_alt() {
     cycle_data(
-        |idx, sidx, data|
+        |_idx, sidx, data|
             if sidx % 2 == 1 {
                 data.clear();
             },
-        |idx, ridx, data| {});
+        |_idx, _ridx, _data| {});
 }
 
 #[test]
 fn send_recv_alt() {
     cycle_data(
-        |idx, sidx, data| {},
-        |idx, ridx, data| 
+        |_idx, _sidx, _data| {},
+        |_idx, ridx, data| 
             if ridx % 2 == 1 {
                 data.clear();
             });
@@ -171,30 +168,30 @@ fn send_recv_alt() {
 
 #[test]
 fn send_flip() {
-    cycle_data(|idx, sidx, data| {
+    cycle_data(|_idx, sidx, data| {
         let mut decode_data = vec!();
-        let decoded = kiss::decode(data.iter().cloned(), &mut decode_data);
+        kiss::decode(data.iter().cloned(), &mut decode_data).unwrap();
 
         let idx = sidx % decode_data.len();
         decode_data[idx] = !decode_data[idx];
 
         data.clear();
-        kiss::encode(io::Cursor::new(&decode_data[..]), data, 0);
-    }, |idx, ridx, data| {});
+        kiss::encode(io::Cursor::new(&decode_data[..]), data, 0).unwrap();
+    }, |_idx, _ridx, _data| {});
 }
 
 #[test]
 fn recv_flip() {
     cycle_data(
-        |idx, sidx, data| {},
-        |idx, ridx, data| {
+        |_idx, _sidx, _data| {},
+        |_idx, ridx, data| {
             let mut decode_data = vec!();
-            let decoded = kiss::decode(data.iter().cloned(), &mut decode_data);
+            kiss::decode(data.iter().cloned(), &mut decode_data).unwrap();
 
             let idx = ridx % decode_data.len();
             decode_data[idx] = !decode_data[idx];
 
             data.clear();
-            kiss::encode(io::Cursor::new(&decode_data[..]), data, 0);
+            kiss::encode(io::Cursor::new(&decode_data[..]), data, 0).unwrap();
         });
 }

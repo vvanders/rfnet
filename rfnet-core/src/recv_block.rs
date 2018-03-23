@@ -81,6 +81,7 @@ impl RecvBlock {
         }
     }
 
+    #[cfg(test)]
     pub fn get_stats(&self) -> &RecvStats {
         &self.stats
     }
@@ -403,7 +404,6 @@ mod test {
     #[test]
     fn test_resend_response() {
         let mut recv_data = vec!();
-        let payload = get_payload();
 
         {
             let mut output = vec!();
@@ -442,7 +442,6 @@ mod test {
     #[test]
     fn test_resend_timeout() {
         let mut recv_data = vec!();
-        let payload = get_payload();
 
         {
             let mut output = vec!();
@@ -471,7 +470,6 @@ mod test {
     #[test]
     fn test_repeat_pending() {
         let mut recv_data = vec!();
-        let payload = get_payload();
 
         {
             let mut output = vec!();

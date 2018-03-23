@@ -12,7 +12,6 @@ use hyper;
 pub struct Link {
     callsign: String,
     inner_state: InnerState,
-    suspended_state: InnerState,
     config: LinkConfig
 }
 
@@ -43,7 +42,6 @@ impl Link {
         Link {
             callsign: callsign.to_string(),
             inner_state: InnerState::Idle { last_broadcast: 0 },
-            suspended_state: InnerState::Idle { last_broadcast: 0 },
             config
         }
     }
@@ -333,8 +331,17 @@ impl Link {
             &mut InnerState::Request { ref remote, ref mut request, ref mut recv, ref mut response } => {
                 //If we didn't get the link established on first pass then resend it
                 let handled = if let &Packet::Control(ref header) = &packet {
-                    Self::send_link_established(&self.callsign, remote, self.config.fec, packet_writer)?;
-                    true
+                    if header.source_callsign == remote.as_bytes() && header.dest_callsign == self.callsign.as_bytes() {
+                        match header.ctrl_type {
+                            ControlType::LinkRequest => {
+                                Self::send_link_established(&self.callsign, remote, self.config.fec, packet_writer)?;
+                                true
+                            },
+                            _ => false
+                        }
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 };
@@ -483,7 +490,7 @@ mod test {
     }
 
     impl HttpProvider for MockHttp {
-        fn request(&mut self, request: hyper::Request) -> Result<hyper::Response, hyper::Error> {
+        fn request(&mut self, _request: hyper::Request) -> Result<hyper::Response, hyper::Error> {
             Err(hyper::Error::Status)
         }
     }
@@ -537,7 +544,7 @@ mod test {
         let mut link = Link::new("KI7EST", config);
 
         let mut output = vec!();
-        link.elapsed(10_000, &mut output);
+        link.elapsed(10_000, &mut output).unwrap();
 
         match decode(&mut output[..], true) {
             Ok((Packet::Broadcast(broadcast),_)) => {
@@ -569,7 +576,7 @@ mod test {
             dest_callsign: "KI7EST".as_bytes()
         });
 
-        write_packet(&mut link, &connect, &mut mock_http(), |p| {});
+        write_packet(&mut link, &connect, &mut mock_http(), |_| {});
         tick(&mut link, NEGOTIATION_TIMEOUT, |p| {
             match p {
                 Some(Packet::Control(ctrl)) => {
@@ -603,7 +610,7 @@ mod test {
             dest_callsign: "KI7EST".as_bytes()
         });
 
-        write_packet(&mut link, &connect, &mut mock_http(), |p| {});
+        write_packet(&mut link, &connect, &mut mock_http(), |_| {});
 
         let mut payload = vec!();
         message::encode_request_message(&message::RequestMessage {
@@ -647,15 +654,16 @@ mod test {
 
         let mut iters = 0;
         let mut response = false;
+        let mut recv_frame = vec!();
         while iters < 200 && !response {
             iters += 1;
 
-            while let Ok(Some(framed)) = send.read_frame() {
+            while let Ok(Some(framed)) = send.read_frame(&mut recv_frame) {
                 link.recv_data(framed, &mut recv, &mut http).unwrap();
             }
 
-            while let Ok(Some(framed)) = recv.read_frame() {
-                let (packet,err) = decode(framed, true).unwrap();
+            while let Ok(Some(framed)) = recv.read_frame(&mut recv_frame) {
+                let (packet,_err) = decode(framed, true).unwrap();
                 match sender.on_packet(&packet, &mut send, &mut payload_reader).unwrap() {
                     SendResult::CompleteResponse => response = true,
                     SendResult::CompleteNoResponse => panic!(),
@@ -674,11 +682,11 @@ mod test {
         while iters < 100 && !received {
             iters += 1;
 
-            while let Ok(Some(framed)) = send.read_frame() {
+            while let Ok(Some(framed)) = send.read_frame(&mut recv_frame) {
                 link.recv_data(framed, &mut recv, &mut http).unwrap();
             }
 
-            while let Ok(Some(framed)) = recv.read_frame() {
+            while let Ok(Some(framed)) = recv.read_frame(&mut recv_frame) {
                 let packet = decode(framed, true).unwrap();
                 match receiver.on_packet(&packet, &mut send, &mut response).unwrap() {
                     RecvResult::CompleteSendResponse => {

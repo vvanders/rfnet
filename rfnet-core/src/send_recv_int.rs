@@ -7,11 +7,12 @@ use framed::{FramedWrite, FramedRead, KISSFramed, LoopbackIo};
 use std::io;
 
 fn cycle_recv<'a,F>(recv: &'a mut RecvBlock, send_channel: &mut F, recv_channel: &mut F, data_output: &mut Vec<u8>) -> Option<RecvResult>
-    where F: FramedWrite + FramedRead {
+    where F: FramedWrite + FramedRead<Vec<u8>> {
 
     recv.tick(100, send_channel).unwrap();
 
-    if let Ok(Some(frame)) = recv_channel.read_frame() {
+    let mut recv_frame = vec!();
+    if let Ok(Some(frame)) = recv_channel.read_frame(&mut recv_frame) {
         let packet = packet::decode(frame, true).unwrap();
         let res = Some(recv.on_packet(&packet, send_channel, data_output).unwrap());
 
@@ -22,11 +23,12 @@ fn cycle_recv<'a,F>(recv: &'a mut RecvBlock, send_channel: &mut F, recv_channel:
 }
 
 fn cycle_send<'a,F,R>(send: &'a mut SendBlock, send_channel: &mut F, recv_channel: &mut F, data_reader: &mut R) -> Option<SendResult>
-    where F: FramedWrite + FramedRead, R: io::Read {
+    where F: FramedWrite + FramedRead<Vec<u8>>, R: io::Read {
 
     send.tick(100, recv_channel).unwrap();
 
-    if let Ok(Some(frame)) = send_channel.read_frame() {
+    let mut recv_frame = vec!();
+    if let Ok(Some(frame)) = send_channel.read_frame(&mut recv_frame) {
         let packet = packet::decode(frame, true).unwrap();
         let res = Some(send.on_packet(&packet.0, recv_channel, data_reader).unwrap());
 
@@ -38,18 +40,18 @@ fn cycle_send<'a,F,R>(send: &'a mut SendBlock, send_channel: &mut F, recv_channe
 
 #[test]
 fn send_recv_full() {
-    let (send,recv) = cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
+    cycle_data(|_idx, _sidx, _data| {}, |_idx, _ridx, _data| {});
 }
 
 #[test]
 fn send_send_alt() {
-    let (send,recv) = cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
+    let (send,recv) = cycle_data(|_idx, _sidx, _data| {}, |_idx, _ridx, _data| {});
     let (send_alt,recv_alt) = cycle_data(
-        |idx, sidx, data|
+        |_idx, sidx, data|
             if sidx % 2 == 1 {
                 data.clear();
             },
-        |idx, ridx, data| {});
+        |_idx, _ridx, _data| {});
 
     assert_eq!(send.packets_sent*2, send_alt.packets_sent);
     assert_eq!(recv.acks_sent*2, recv_alt.acks_sent);
@@ -60,10 +62,10 @@ fn send_send_alt() {
 
 #[test]
 fn send_recv_alt() {
-    let (send,recv) = cycle_data(|idx, sidx, data| {}, |idx, ridx, data| {});
+    let (send,recv) = cycle_data(|_idx, _sidx, _data| {}, |_idx, _ridx, _data| {});
     let (send_alt,recv_alt) = cycle_data(
-        |idx, sidx, data| {},
-        |idx, ridx, data| 
+        |_idx, _sidx, _data| {},
+        |_idx, ridx, data| 
             if ridx % 2 == 1 {
                 data.clear();
             });
@@ -81,9 +83,9 @@ fn send_flip() {
     let (send,recv) = {
         let errs_ref = &mut errs;
 
-        cycle_data(|idx, sidx, data| {
+        cycle_data(|_idx, sidx, data| {
             let mut decode_data = vec!();
-            let decoded = kiss::decode(data.iter().cloned(), &mut decode_data);
+            kiss::decode(data.iter().cloned(), &mut decode_data).unwrap();
 
             let idx = sidx % decode_data.len();
             *errs_ref += 1;
@@ -92,9 +94,9 @@ fn send_flip() {
             trace!("errref {}", errs_ref);
 
             data.clear();
-            kiss::encode(io::Cursor::new(&decode_data[..]), data, 0);
+            kiss::encode(io::Cursor::new(&decode_data[..]), data, 0).unwrap();
 
-        }, |idx, ridx, data| {})
+        }, |_idx, _ridx, _data| {})
     };
 
     assert_eq!(send.recv_bit_err, errs - 1); //Send doesn't hear last ack
@@ -108,10 +110,10 @@ fn recv_flip() {
         let errs_ref = &mut errs;
 
         cycle_data(
-            |idx, sidx, data| {},
-            |idx, ridx, data| {
+            |_idx, _sidx, _data| {},
+            |_idx, ridx, data| {
                 let mut decode_data = vec!();
-                let decoded = kiss::decode(data.iter().cloned(), &mut decode_data);
+                kiss::decode(data.iter().cloned(), &mut decode_data).unwrap();
 
                 let idx = ridx % decode_data.len();
                 *errs_ref += 1;
@@ -120,7 +122,7 @@ fn recv_flip() {
                 trace!("errref {}", errs_ref);
 
                 data.clear();
-                kiss::encode(io::Cursor::new(&decode_data[..]), data, 0);
+                kiss::encode(io::Cursor::new(&decode_data[..]), data, 0).unwrap();
             })
     };
 
@@ -159,10 +161,10 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R) -> (SendStats, Recv
                 _ => {}
             }
 
-            if recv_chan.get_tnc().buffer_mut().len() > 0 {
+            if recv_chan.get_tnc_mut().buffer_mut().len() > 0 {
                 send_idx += 1;
 
-                drop_send_fn(i, send_idx, recv_chan.get_tnc().buffer_mut());
+                drop_send_fn(i, send_idx, recv_chan.get_tnc_mut().buffer_mut());
             }
 
             match cycle_recv(&mut recv, &mut send_chan, &mut recv_chan, &mut received) {
@@ -173,10 +175,10 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R) -> (SendStats, Recv
                 _ => {}
             }
 
-            if send_chan.get_tnc().buffer_mut().len() > 0 {
+            if send_chan.get_tnc_mut().buffer_mut().len() > 0 {
                 recv_idx += 1;
 
-                drop_recv_fn(i, recv_idx, send_chan.get_tnc().buffer_mut());
+                drop_recv_fn(i, recv_idx, send_chan.get_tnc_mut().buffer_mut());
             }
 
             if send_complete && recv_complete {

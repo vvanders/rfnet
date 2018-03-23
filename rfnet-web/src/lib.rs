@@ -20,12 +20,18 @@ use std::thread;
 use std::sync::mpsc;
 use std::net::TcpStream;
 
-type ClientID = usize;
+pub type ClientID = usize;
 
 pub struct WebInterface {
     _iron: iron::Listening,
     _ws_thread: thread::JoinHandle<()>,
     ws_send: mpsc::Sender<ClientEvent>
+}
+
+pub enum HttpEvent {
+    ClientConnect(ClientID),
+    ClientDisconnect(ClientID),
+    Message { id: ClientID, msg: proto::Command }
 }
 
 pub struct WebsocketMessage {
@@ -41,7 +47,7 @@ enum ClientEvent {
 }
 
 pub fn new<F,T>(http_port: u16, ws_port: u16, out_msg: mpsc::Sender<T>, map_msg: F) -> HttpResult<WebInterface> 
-        where F: Fn(WebsocketMessage) -> T + Copy + Send + Sync + 'static, T: Send + 'static {
+        where F: Fn(HttpEvent) -> T + Copy + Send + Sync + 'static, T: Send + 'static {
     let mut router = Router::new();
 
     router.get("/", Static::new("static-web"), "index");
@@ -70,15 +76,23 @@ pub fn new<F,T>(http_port: u16, ws_port: u16, out_msg: mpsc::Sender<T>, map_msg:
 
                     thread::spawn(move || {
                         client_ws_event_tx.send(ClientEvent::Connected(client_id, writer)).unwrap();
+                        client_ws_recv_tx.send(map_msg(HttpEvent::ClientConnect(client_id))).unwrap();
                         for message in reader.incoming_messages() {
                             match message {
                                 Ok(websocket::OwnedMessage::Text(m)) => {
-                                    client_ws_recv_tx.send(map_msg(WebsocketMessage {
-                                            id: client_id,
-                                            msg: m
-                                        })).unwrap();
+                                    trace!("Got JSON \n{}", &m);
+                                    match serde_json::from_str::<proto::Command>(m.as_str()) {
+                                        Ok(cmd) => {
+                                            client_ws_recv_tx.send(map_msg(HttpEvent::Message {
+                                                    id: client_id,
+                                                    msg: cmd
+                                                })).unwrap();
+                                        },
+                                        Err(e) => error!("Unable to decode json {:?}", e)
+                                    }
                                 },
                                 Ok(websocket::OwnedMessage::Close(_)) => {
+                                    client_ws_recv_tx.send(map_msg(HttpEvent::ClientDisconnect(client_id))).unwrap();
                                     client_ws_event_tx.send(ClientEvent::Disconnected(client_id)).unwrap();
                                 }
                                 Ok(m) => debug!("Unknown message type {:?} on socket {}", m, client_id),
@@ -155,13 +169,13 @@ impl WebInterface {
         self.ws_send.send(ClientEvent::SendMsg(id, json)).map_err(|_| ())
     }
 
-    pub fn broadcast(&mut self, msg: proto::Message) -> Result<(), ()> {
-        let serialized = serde_json::to_string(&msg).map_err(|_| ())?;
+    pub fn broadcast(&mut self, msg: &proto::Message) -> Result<(), ()> {
+        let serialized = serde_json::to_string(msg).map_err(|_| ())?;
         self.broadcast_json(serialized)
     }
 
-    pub fn send(&mut self, id: ClientID, msg: proto::Message) -> Result<(), ()> {
-        let serialized = serde_json::to_string(&msg).map_err(|_| ())?;
+    pub fn send(&mut self, id: ClientID, msg: &proto::Message) -> Result<(), ()> {
+        let serialized = serde_json::to_string(msg).map_err(|_| ())?;
         self.send_json(id, serialized)
     }
 }

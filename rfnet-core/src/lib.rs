@@ -11,15 +11,14 @@ extern crate rust_sodium;
 extern crate simple_logger;
 
 mod kiss;
-mod framed;
+pub mod framed;
 mod packet;
-mod link;
-mod node;
-mod acked_packet;
+pub mod link;
+pub mod node;
 mod send_block;
 mod recv_block;
-mod message;
-mod request_response;
+pub mod message;
+pub mod request_response;
 
 #[cfg(test)]
 mod send_recv_int;
@@ -28,3 +27,7 @@ mod node_link_int;
 
 const MAJOR_VER: u8 = 0;
 const MINOR_VER: u8 = 1;
+
+pub use link::{ Link, LinkConfig, HttpProvider };
+pub use node::{ Node, RemoteLinkConfig };
+pub use send_block::RetryConfig;

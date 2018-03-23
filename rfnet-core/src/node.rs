@@ -13,7 +13,7 @@ pub struct Node {
 
 struct Inner {
     callsign: String,
-    config: Option<LinkConfig>,
+    config: Option<RemoteLinkConfig>,
     retry_config: RetryConfig
 }
 
@@ -54,7 +54,7 @@ impl<'a,R,W> ::std::fmt::Debug for Event<'a,R,W> where R: 'a + io::Read, W: 'a +
 }
 
 #[derive(Debug,PartialEq)]
-pub struct LinkConfig {
+pub struct RemoteLinkConfig {
     pub fec_enabled: bool,
     pub retry_enabled: bool,
     pub major_ver: u8,
@@ -100,8 +100,8 @@ pub enum ClientEvent {
 const LISTEN_TIMEOUT: usize = 10_000;
 const IDLE_TIMEOUT: usize = 2_000;
 
-fn link_config_from_broadcast(broadcast: &BroadcastPacket) -> LinkConfig {
-    LinkConfig {
+fn link_config_from_broadcast(broadcast: &BroadcastPacket) -> RemoteLinkConfig {
+    RemoteLinkConfig {
         fec_enabled: broadcast.fec_enabled,
         retry_enabled: broadcast.retry_enabled,
         major_ver: broadcast.major_ver,
@@ -112,7 +112,7 @@ fn link_config_from_broadcast(broadcast: &BroadcastPacket) -> LinkConfig {
 }
 
 impl Node {
-    pub fn new(callsign: String, config: Option<LinkConfig>, retry_config: RetryConfig) -> Node {
+    pub fn new(callsign: String, config: Option<RemoteLinkConfig>, retry_config: RetryConfig) -> Node {
         Node {
             state: State::Listening { idle: 0 },
             inner: Inner {
@@ -127,7 +127,7 @@ impl Node {
         ClientState::translate(&self.state)
     }
 
-    pub fn get_link(&self) -> &Option<LinkConfig> {
+    pub fn get_link(&self) -> &Option<RemoteLinkConfig> {
         &self.inner.config
     }
 
@@ -232,7 +232,7 @@ impl Inner {
         }
     }
 
-    fn handle_listening<P,R,W,E>(&mut self, idle: &mut usize, event: Event<R,W>, packet_writer: &mut P, event_handler: &mut E) -> io::Result<Option<State>>
+    fn handle_listening<P,R,W,E>(&mut self, idle: &mut usize, event: Event<R,W>, _packet_writer: &mut P, _event_handler: &mut E) -> io::Result<Option<State>>
             where P: FramedWrite, R: io::Read, W: io::Write, E: FnMut(ClientEvent) {
         let res = match event {
             Event::Tick { ms } => {
@@ -271,7 +271,7 @@ impl Inner {
         Ok(res)
     }
 
-    fn handle_idle<P,R,W,E>(&mut self, event: Event<R,W>, packet_writer: &mut P, event_handler: &mut E) -> io::Result<Option<State>>
+    fn handle_idle<P,R,W,E>(&mut self, event: Event<R,W>, packet_writer: &mut P, _event_handler: &mut E) -> io::Result<Option<State>>
             where P: FramedWrite, R: io::Read, W: io::Write, E: FnMut(ClientEvent) {
         let res = match event {
             Event::Data { packet, .. } => {
@@ -487,7 +487,7 @@ impl Inner {
                     Err(e) => Err(e)
                 }
             },
-            Event::Tick { ms } => {
+            Event::Tick { .. } => {
                 Ok(None)
             },
             e => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("Unsupported event {:?} for Recv state", e)).into())
@@ -557,7 +557,7 @@ mod test {
             callsign: "KI7EST".as_bytes(),
         });
 
-        let expected = LinkConfig {
+        let expected = RemoteLinkConfig {
             fec_enabled: true,
             retry_enabled: true,
             major_ver: 1,
@@ -591,8 +591,8 @@ mod test {
         }
     }
 
-    fn get_default_config() -> LinkConfig {
-        LinkConfig {
+    fn get_default_config() -> RemoteLinkConfig {
+        RemoteLinkConfig {
             fec_enabled: true,
             retry_enabled: true,
             major_ver: 1,
@@ -862,13 +862,14 @@ mod test {
             let data_len = rr.request.get_data().len();
             node.start_request(&mut rr.request, data_len, &mut send, &mut event_handler).unwrap();
 
+            let mut recv_frame = vec!();
             for _ in 0..100 {
-                if let Ok(Some(frame)) = recv.read_frame() {
+                if let Ok(Some(frame)) = recv.read_frame(&mut recv_frame) {
                     node.on_data(frame, &mut send, &mut rr.response, &mut rr.request, &mut event_handler).unwrap();
                     node.tick(100, &mut send, &mut event_handler).unwrap();
                 }
 
-                if let Ok(Some(frame)) = send.read_frame() {
+                if let Ok(Some(frame)) = send.read_frame(&mut recv_frame) {
                     let packet = packet::decode(frame, true).unwrap();
                     match recv_block.on_packet(&packet, &mut recv, &mut recv_data).unwrap() {
                         RecvResult::Active => {},
@@ -948,13 +949,14 @@ mod test {
             let data_len = rr.request.get_data().len();
             node.start_request(&mut rr.request, data_len, &mut send, &mut event_handler).unwrap();
 
+            let mut recv_frame = vec!();
             for _ in 0..100 {
-                if let Ok(Some(frame)) = recv.read_frame() {
+                if let Ok(Some(frame)) = recv.read_frame(&mut recv_frame) {
                     node.on_data(frame, &mut send, &mut rr.response, &mut rr.request, &mut event_handler).unwrap();
                     node.tick(100, &mut send, &mut event_handler).unwrap();
                 }
 
-                if let Ok(Some(frame)) = send.read_frame() {
+                if let Ok(Some(frame)) = send.read_frame(&mut recv_frame) {
                     let packet = packet::decode(frame, true).unwrap();
 
                     if !recv_started {

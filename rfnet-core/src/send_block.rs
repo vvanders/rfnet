@@ -100,12 +100,9 @@ impl SendBlock {
         }
     }
 
+    #[cfg(test)]
     pub fn get_stats(&self) -> &SendStats {
         &self.stats
-    }
-
-    pub fn set_fec(&mut self, fec: Option<u8>) {
-        self.config.fec = fec;
     }
 
     fn send_data<W,R>(&mut self, packet_idx: u16, packet_writer: &mut W, data_reader: &mut R) -> io::Result<()>
@@ -316,7 +313,7 @@ mod test {
 
             assert_eq!(send.get_stats().missed_acks, i+1);
             match decode(&mut output[..], true).unwrap() {
-                (Packet::Data(header, payload),_) => {},
+                (Packet::Data(_header, _payload),_) => {},
                 o => panic!("{:?}", o)
             }
         }
