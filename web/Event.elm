@@ -36,23 +36,32 @@ decodeLog =
     in
         map Log (field "Log" map_line)
 
-decodeInterfaceType: String -> Decoder Mode
-decodeInterfaceType value =
-    case value of
-        "Node" ->
-            succeed Node
-        "Link" ->
-            succeed Link
-        "Unconfigured" ->
-            succeed Unconfigured
-        _ -> 
-            fail "Unsupported value"
+decodeInterfaceType: Decoder Mode
+decodeInterfaceType =
+    let
+        str_decoder = (\s -> case s of
+            "Link" -> succeed Link
+            "Unconfigured" -> succeed Unconfigured
+            _ -> fail "Unsupported value")
+        node_decoder = (\s -> case s of 
+            "Listening" -> succeed (Node Listening)
+            "Idle" -> succeed (Node Idle)
+            "Negotiating" -> succeed (Node Negotiating)
+            "Established" -> succeed (Node Established)
+            "Sending" -> succeed (Node Sending)
+            "Receiving" -> succeed (Node Receiving)
+            _ -> fail "Unsupported value")
+    in
+        oneOf [
+            ((field "Node" string) |> andThen node_decoder),
+            (string |> andThen str_decoder)
+        ]
 
 decodeInterface: Decoder Event
 decodeInterface =
     let
         map_interface = map2 Interface
-            ((field "mode" string) |> andThen decodeInterfaceType)
+            (field "mode" decodeInterfaceType)
             (field "tnc" string)
     in
 

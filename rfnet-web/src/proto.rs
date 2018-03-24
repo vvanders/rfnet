@@ -1,3 +1,5 @@
+use rfnet_core::node;
+
 use log;
 
 #[derive(Serialize, Deserialize)]
@@ -34,9 +36,34 @@ pub struct Interface {
     pub tnc: String
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum NodeState {
+    Listening,
+    Idle,
+    Negotiating,
+    Established,
+    Sending,
+    Receiving
+}
+
+impl ::std::convert::From<node::ClientState> for NodeState {
+    fn from(state: node::ClientState) -> NodeState {
+        use self::node::ClientState;
+
+        match state {
+            ClientState::Listening => NodeState::Listening,
+            ClientState::Idle => NodeState::Idle,
+            ClientState::Negotiating => NodeState::Negotiating,
+            ClientState::Established => NodeState::Established,
+            ClientState::Sending => NodeState::Sending,
+            ClientState::Receiving => NodeState::Receiving
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Mode {
-    Node,
+    Node(NodeState),
     Link,
     Unconfigured
 }

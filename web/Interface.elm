@@ -5,8 +5,16 @@ type alias Interface = {
     tnc: String
 }
 
+type NodeState =
+    Listening
+    | Idle
+    | Negotiating
+    | Established
+    | Sending
+    | Receiving
+
 type Mode = 
-    Node
+    Node NodeState
     | Link
     | Unconfigured
 

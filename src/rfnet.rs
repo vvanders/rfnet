@@ -81,7 +81,7 @@ impl RFNet {
             let result = if let Ok(Some(frame)) = frame {
                 match self.mode {
                     Mode::Node { ref mut node } => {
-                        node.on_data(frame, tnc, &mut self.request_reader, &mut self.response_writer, |_| panic!("unimplemented"))?;
+                        node.on_data(frame, tnc, &mut self.request_reader, &mut self.response_writer, |_| println!("unimplemented"))?;
                         true
                     },
                     Mode::Link { ref mut link } => {
@@ -110,7 +110,7 @@ impl RFNet {
             };
 
             match self.mode {
-                Mode::Node { ref mut node } => node.tick(elapsed, tnc, |_| panic!("unimplemented"))?,
+                Mode::Node { ref mut node } => node.tick(elapsed, tnc, |_| println!("unimplemented"))?,
                 Mode::Link { ref mut link } => link.elapsed(elapsed, tnc)?,
                 Mode::Unconfigured => {}
             }
@@ -123,7 +123,7 @@ impl RFNet {
 
     pub fn snapshot(&self) -> proto::Interface {
         let mode = match self.mode {
-            Mode::Node { .. } => proto::Mode::Node,
+            Mode::Node { ref node } => proto::Mode::Node(proto::NodeState::from(node.get_state())),
             Mode::Link { .. } => proto::Mode::Link,
             Mode::Unconfigured => proto::Mode::Unconfigured
         };

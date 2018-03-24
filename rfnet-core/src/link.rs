@@ -398,6 +398,8 @@ impl Link {
                         packet_writer.start_frame()?;
                         encode(&packet, self.config.fec, packet_writer)?;
                         packet_writer.end_frame()?;
+
+                        debug!("Sending broadcast packet");
                     }
                 }
 

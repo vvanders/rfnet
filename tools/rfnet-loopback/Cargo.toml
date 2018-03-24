@@ -1,0 +1,13 @@
+[package]
+name = "rfnet-loopback"
+version = "0.1.0"
+authors = ["Val Vanderschaegen <valere.vanderschaegen@gmail.com>"]
+
+[dependencies]
+rfnet-core = { path = "../../rfnet-core" }
+hyper = "0.11.18"
+tokio-core = "0.1.12"
+futures = "0.1.17"
+simple_logger = "*"
+
+[workspace]

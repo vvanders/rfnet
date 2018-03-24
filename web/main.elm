@@ -7,11 +7,25 @@ import Event exposing (..)
 import Interface exposing (..)
 import Command exposing (..)
 
+type HttpMethod =
+    GET
+    | POST
+    | PATCH
+    | PUT
+    | DELETE
+
+type alias Request = {
+    url: String,
+    method: HttpMethod,
+    content: String
+}
+
 type alias Model = {
     socketAddr: String,
     log: List String,
     interface: Interface,
-    config: Configuration
+    config: Configuration,
+    request: Request
 }
 
 main : Program Flags Model Event
@@ -45,6 +59,11 @@ init flags =
                     delay_ms = 0,
                     retry_attempts = 5
                 }
+            },
+            request = {
+                url = "",
+                method = GET,
+                content = ""
             }
         },
         Cmd.none
@@ -153,16 +172,23 @@ viewConfig config =
             ]
         ]
 
+viewNode : NodeState -> Html Event
+viewNode state =
+    div [] [
+        text ("Node - " ++ (toString state))
+    ]
+
 viewInterface : Interface -> Html Event
 viewInterface interface =
     let
         mode = case interface.mode of
-            Node -> "Node"
-            Link -> "Link"
-            Unconfigured -> "Unconfigured"
+            Node state -> viewNode state
+            Link -> text "Link"
+            Unconfigured -> text "Unconfigured"
     in
         div [] [
-            text (mode ++ " (" ++ interface.tnc ++ ")"),
+            text ("TNC: " ++ interface.tnc),
+            mode,
             button [ onClick (Command (ConnectTNC "127.0.0.1:8001")) ] [ text "Connect" ]
         ]
 

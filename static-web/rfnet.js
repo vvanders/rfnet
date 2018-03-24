@@ -9227,9 +9227,17 @@ var _user$project$Interface$Configuration = F3(
 	function (a, b, c) {
 		return {mode: a, callsign: b, retry: c};
 	});
+var _user$project$Interface$Receiving = {ctor: 'Receiving'};
+var _user$project$Interface$Sending = {ctor: 'Sending'};
+var _user$project$Interface$Established = {ctor: 'Established'};
+var _user$project$Interface$Negotiating = {ctor: 'Negotiating'};
+var _user$project$Interface$Idle = {ctor: 'Idle'};
+var _user$project$Interface$Listening = {ctor: 'Listening'};
 var _user$project$Interface$Unconfigured = {ctor: 'Unconfigured'};
 var _user$project$Interface$Link = {ctor: 'Link'};
-var _user$project$Interface$Node = {ctor: 'Node'};
+var _user$project$Interface$Node = function (a) {
+	return {ctor: 'Node', _0: a};
+};
 var _user$project$Interface$ConfigLink = function (a) {
 	return {ctor: 'ConfigLink', _0: a};
 };
@@ -9371,19 +9379,57 @@ var _user$project$Event$encodeCmd = function (cmd) {
 	}();
 	return A2(_elm_lang$core$Json_Encode$encode, 0, json_value);
 };
-var _user$project$Event$decodeInterfaceType = function (value) {
-	var _p4 = value;
-	switch (_p4) {
-		case 'Node':
-			return _elm_lang$core$Json_Decode$succeed(_user$project$Interface$Node);
-		case 'Link':
-			return _elm_lang$core$Json_Decode$succeed(_user$project$Interface$Link);
-		case 'Unconfigured':
-			return _elm_lang$core$Json_Decode$succeed(_user$project$Interface$Unconfigured);
-		default:
-			return _elm_lang$core$Json_Decode$fail('Unsupported value');
-	}
-};
+var _user$project$Event$decodeInterfaceType = function () {
+	var node_decoder = function (s) {
+		var _p4 = s;
+		switch (_p4) {
+			case 'Listening':
+				return _elm_lang$core$Json_Decode$succeed(
+					_user$project$Interface$Node(_user$project$Interface$Listening));
+			case 'Idle':
+				return _elm_lang$core$Json_Decode$succeed(
+					_user$project$Interface$Node(_user$project$Interface$Idle));
+			case 'Negotiating':
+				return _elm_lang$core$Json_Decode$succeed(
+					_user$project$Interface$Node(_user$project$Interface$Negotiating));
+			case 'Established':
+				return _elm_lang$core$Json_Decode$succeed(
+					_user$project$Interface$Node(_user$project$Interface$Established));
+			case 'Sending':
+				return _elm_lang$core$Json_Decode$succeed(
+					_user$project$Interface$Node(_user$project$Interface$Sending));
+			case 'Receiving':
+				return _elm_lang$core$Json_Decode$succeed(
+					_user$project$Interface$Node(_user$project$Interface$Receiving));
+			default:
+				return _elm_lang$core$Json_Decode$fail('Unsupported value');
+		}
+	};
+	var str_decoder = function (s) {
+		var _p5 = s;
+		switch (_p5) {
+			case 'Link':
+				return _elm_lang$core$Json_Decode$succeed(_user$project$Interface$Link);
+			case 'Unconfigured':
+				return _elm_lang$core$Json_Decode$succeed(_user$project$Interface$Unconfigured);
+			default:
+				return _elm_lang$core$Json_Decode$fail('Unsupported value');
+		}
+	};
+	return _elm_lang$core$Json_Decode$oneOf(
+		{
+			ctor: '::',
+			_0: A2(
+				_elm_lang$core$Json_Decode$andThen,
+				node_decoder,
+				A2(_elm_lang$core$Json_Decode$field, 'Node', _elm_lang$core$Json_Decode$string)),
+			_1: {
+				ctor: '::',
+				_0: A2(_elm_lang$core$Json_Decode$andThen, str_decoder, _elm_lang$core$Json_Decode$string),
+				_1: {ctor: '[]'}
+			}
+		});
+}();
 var _user$project$Event$Command = function (a) {
 	return {ctor: 'Command', _0: a};
 };
@@ -9394,10 +9440,7 @@ var _user$project$Event$decodeInterface = function () {
 	var map_interface = A3(
 		_elm_lang$core$Json_Decode$map2,
 		_user$project$Interface$Interface,
-		A2(
-			_elm_lang$core$Json_Decode$andThen,
-			_user$project$Event$decodeInterfaceType,
-			A2(_elm_lang$core$Json_Decode$field, 'mode', _elm_lang$core$Json_Decode$string)),
+		A2(_elm_lang$core$Json_Decode$field, 'mode', _user$project$Event$decodeInterfaceType),
 		A2(_elm_lang$core$Json_Decode$field, 'tnc', _elm_lang$core$Json_Decode$string));
 	return A2(
 		_elm_lang$core$Json_Decode$map,
@@ -9448,11 +9491,11 @@ var _user$project$Event$decode = function (str) {
 				}
 			}),
 		str);
-	var _p5 = result;
-	if (_p5.ctor === 'Ok') {
-		return _p5._0;
+	var _p6 = result;
+	if (_p6.ctor === 'Ok') {
+		return _p6._0;
 	} else {
-		return _user$project$Event$DecodeError(_p5._0);
+		return _user$project$Event$DecodeError(_p6._0);
 	}
 };
 
@@ -9536,18 +9579,7 @@ var _user$project$Main$update = F2(
 				}
 		}
 	});
-var _user$project$Main$viewInterface = function ($interface) {
-	var mode = function () {
-		var _p3 = $interface.mode;
-		switch (_p3.ctor) {
-			case 'Node':
-				return 'Node';
-			case 'Link':
-				return 'Link';
-			default:
-				return 'Unconfigured';
-		}
-	}();
+var _user$project$Main$viewNode = function (state) {
 	return A2(
 		_elm_lang$html$Html$div,
 		{ctor: '[]'},
@@ -9556,28 +9588,51 @@ var _user$project$Main$viewInterface = function ($interface) {
 			_0: _elm_lang$html$Html$text(
 				A2(
 					_elm_lang$core$Basics_ops['++'],
-					mode,
-					A2(
-						_elm_lang$core$Basics_ops['++'],
-						' (',
-						A2(_elm_lang$core$Basics_ops['++'], $interface.tnc, ')')))),
+					'Node - ',
+					_elm_lang$core$Basics$toString(state))),
+			_1: {ctor: '[]'}
+		});
+};
+var _user$project$Main$viewInterface = function ($interface) {
+	var mode = function () {
+		var _p3 = $interface.mode;
+		switch (_p3.ctor) {
+			case 'Node':
+				return _user$project$Main$viewNode(_p3._0);
+			case 'Link':
+				return _elm_lang$html$Html$text('Link');
+			default:
+				return _elm_lang$html$Html$text('Unconfigured');
+		}
+	}();
+	return A2(
+		_elm_lang$html$Html$div,
+		{ctor: '[]'},
+		{
+			ctor: '::',
+			_0: _elm_lang$html$Html$text(
+				A2(_elm_lang$core$Basics_ops['++'], 'TNC: ', $interface.tnc)),
 			_1: {
 				ctor: '::',
-				_0: A2(
-					_elm_lang$html$Html$button,
-					{
-						ctor: '::',
-						_0: _elm_lang$html$Html_Events$onClick(
-							_user$project$Event$Command(
-								_user$project$Command$ConnectTNC('127.0.0.1:8001'))),
-						_1: {ctor: '[]'}
-					},
-					{
-						ctor: '::',
-						_0: _elm_lang$html$Html$text('Connect'),
-						_1: {ctor: '[]'}
-					}),
-				_1: {ctor: '[]'}
+				_0: mode,
+				_1: {
+					ctor: '::',
+					_0: A2(
+						_elm_lang$html$Html$button,
+						{
+							ctor: '::',
+							_0: _elm_lang$html$Html_Events$onClick(
+								_user$project$Event$Command(
+									_user$project$Command$ConnectTNC('127.0.0.1:8001'))),
+							_1: {ctor: '[]'}
+						},
+						{
+							ctor: '::',
+							_0: _elm_lang$html$Html$text('Connect'),
+							_1: {ctor: '[]'}
+						}),
+					_1: {ctor: '[]'}
+				}
 			}
 		});
 };
@@ -10061,6 +10116,22 @@ var _user$project$Main$view = function (model) {
 			}
 		});
 };
+var _user$project$Main$Request = F3(
+	function (a, b, c) {
+		return {url: a, method: b, content: c};
+	});
+var _user$project$Main$Model = F5(
+	function (a, b, c, d, e) {
+		return {socketAddr: a, log: b, $interface: c, config: d, request: e};
+	});
+var _user$project$Main$Flags = function (a) {
+	return {socket: a};
+};
+var _user$project$Main$DELETE = {ctor: 'DELETE'};
+var _user$project$Main$PUT = {ctor: 'PUT'};
+var _user$project$Main$PATCH = {ctor: 'PATCH'};
+var _user$project$Main$POST = {ctor: 'POST'};
+var _user$project$Main$GET = {ctor: 'GET'};
 var _user$project$Main$init = function (flags) {
 	return {
 		ctor: '_Tuple2',
@@ -10072,7 +10143,8 @@ var _user$project$Main$init = function (flags) {
 				mode: _user$project$Interface$ConfigNode,
 				callsign: 'CALLSIGN',
 				retry: {bps: 1200, bps_scale: 1.0, delay_ms: 0, retry_attempts: 5}
-			}
+			},
+			request: {url: '', method: _user$project$Main$GET, content: ''}
 		},
 		_1: _elm_lang$core$Platform_Cmd$none
 	};
@@ -10086,13 +10158,6 @@ var _user$project$Main$main = _elm_lang$html$Html$programWithFlags(
 				{socket: socket});
 		},
 		A2(_elm_lang$core$Json_Decode$field, 'socket', _elm_lang$core$Json_Decode$string)));
-var _user$project$Main$Model = F4(
-	function (a, b, c, d) {
-		return {socketAddr: a, log: b, $interface: c, config: d};
-	});
-var _user$project$Main$Flags = function (a) {
-	return {socket: a};
-};
 
 var Elm = {};
 Elm['Main'] = Elm['Main'] || {};

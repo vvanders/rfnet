@@ -105,6 +105,10 @@ impl LoopbackIo {
         }
     }
 
+    pub fn buffer(&self) -> &Vec<u8> {
+        &self.buffer
+    }
+
     pub fn buffer_mut(&mut self) -> &mut Vec<u8> {
         &mut self.buffer
     }

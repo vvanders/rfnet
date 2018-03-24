@@ -8,6 +8,7 @@ extern crate websocket;
 extern crate serde_derive;
 extern crate serde;
 extern crate serde_json;
+extern crate rfnet_core;
 
 pub mod proto;
 
