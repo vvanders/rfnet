@@ -124,7 +124,8 @@ fn main() {
                 Event::WebsocketMessage(_id, msg) => {
                     match msg {
                         Command::ConnectTNC(addr) => rfnet.connect_tcp_tnc(addr.as_str()),
-                        Command::Configure(config) => rfnet.configure(config)
+                        Command::Configure(config) => rfnet.configure(config),
+                        Command::Request(request) => rfnet.request(request)
                     }
                 },
                 Event::ClientConnected(id) => {

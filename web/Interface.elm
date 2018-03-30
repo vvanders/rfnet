@@ -39,3 +39,16 @@ type alias Configuration = {
     callsign: String,
     retry: RetryConfig
 }
+
+type HttpMethod =
+    GET
+    | POST
+    | PATCH
+    | PUT
+    | DELETE
+
+type alias Request = {
+    url: String,
+    method: HttpMethod,
+    content: String
+}

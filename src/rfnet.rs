@@ -1,5 +1,7 @@
 use rfnet_core::*;
 use rfnet_core::framed::{KISSFramed, FramedRead, FramedWrite};
+use rfnet_core::node::{ClientEvent, ClientState};
+use rfnet_core::message;
 use rfnet_web::proto;
 
 use hyper;
@@ -8,9 +10,25 @@ use tokio_core;
 use std::net::TcpStream;
 use std::io;
 
-pub enum Mode {
-    Node { node: Node },
-    Link { link: Link },
+struct NodeState {
+    node: Node,
+    request_reader: io::Cursor<Vec<u8>>,
+    response_writer: Vec<u8>,
+    requests: Vec<proto::Request>,
+    active_request: Option<proto::Request>,
+
+    private_key: [u8; 64],
+    message_encode_scratch: Vec<u8>
+}
+
+struct LinkState {
+    link: Link,
+    event_loop: tokio_core::reactor::Core
+}
+
+enum Mode {
+    Node(NodeState),
+    Link(LinkState),
     Unconfigured
 }
 
@@ -50,9 +68,6 @@ pub struct RFNet {
     mode: Mode,
     tnc: Option<TNC>,
     recv_buffer: Vec<u8>,
-    request_reader: Vec<u8>,
-    response_writer: io::Cursor<Vec<u8>>,
-    event_loop: tokio_core::reactor::Core
 }
 
 impl RFNet {
@@ -61,30 +76,123 @@ impl RFNet {
             mode: Mode::Unconfigured,
             tnc: None,
             recv_buffer: vec!(),
-            request_reader: vec!(),
-            response_writer: io::Cursor::new(vec!()),
-            event_loop: tokio_core::reactor::Core::new().unwrap()
         }
     }
 
-    pub fn update_tnc(&mut self, elapsed: usize) -> io::Result<bool> {
-        let frame = if let Some(ref mut tnc) = self.tnc {
-            match tnc {
-                &mut TNC::TCP(ref mut tnc) => tnc.read_frame(&mut self.recv_buffer)
-            }
-        } else {
-            ::std::thread::sleep(::std::time::Duration::from_millis(100));
-            Ok(None)
-        };
+    pub fn request(&mut self, request: proto::Request) {
+        match self.mode {
+            Mode::Node(ref mut state) => state.requests.push(request),
+            _ => error!("Attempting to queue request on non-node")
+        }
+    }
 
+    fn send_request(state: &mut NodeState) -> io::Result<()> {
+        state.active_request = state.requests.pop();
+        state.response_writer = vec!();
+
+        if let Some(ref request) = state.active_request {
+            let mut buffer = vec!();
+            let msg = message::RequestMessage {
+                sequence_id: 0, //@todo
+                addr: request.addr.as_str(),
+                req_type: message::RequestType::REST {
+                    url: request.url.as_str(),
+                    headers: "",
+                    body: request.content.as_str(),
+                    method: request.method.clone().into()
+                }
+            };
+
+            message::encode_request_message(&msg, &state.private_key[..], &mut state.message_encode_scratch, &mut buffer)?;
+
+            state.request_reader = io::Cursor::new(buffer);
+        } else {
+            state.request_reader = io::Cursor::new(vec!());
+        }
+
+        Ok(())
+    }
+
+    pub fn update_tnc<'a>(&'a mut self, elapsed: usize) -> io::Result<Option<proto::Response>> {
         if let Some(ref mut tnc) = self.tnc {
-            let result = if let Ok(Some(frame)) = frame {
-                match self.mode {
-                    Mode::Node { ref mut node } => {
-                        node.on_data(frame, tnc, &mut self.request_reader, &mut self.response_writer, |_| println!("unimplemented"))?;
-                        true
-                    },
-                    Mode::Link { ref mut link } => {
+            let frame = match tnc {
+                &mut TNC::TCP(ref mut tnc) => tnc.read_frame(&mut self.recv_buffer)?
+            };
+
+            match self.mode {
+                Mode::Node(ref mut state) => {
+                    let mut events = vec!();
+                    {
+                        let mut event_handler = |e| events.push(e);
+
+                        if let Some(frame) = frame {
+                            state.node.on_data(frame, tnc, &mut state.response_writer, &mut state.request_reader, &mut event_handler)?;
+                        }
+
+                        let send_request = match state.node.get_state() {
+                            ClientState::Sending | ClientState::Receiving => false,
+                            ClientState::Established => true,
+                            ClientState::Listening | ClientState::Idle | ClientState::Negotiating => false,
+                        };
+
+                        if let Some(_) = state.active_request {
+                            if send_request {
+                                let size = state.request_reader.get_ref().len();
+                                state.node.start_request(&mut state.request_reader, size, tnc, &mut event_handler)?;
+                            } else {
+                                if let ClientState::Idle = state.node.get_state() {
+                                    state.node.connect(tnc, &mut event_handler)?;
+                                }
+                            }
+                        }
+
+                        state.node.tick(elapsed, tnc, &mut event_handler)?;
+                    }
+
+                    let mut result = None;
+
+                    for event in events {
+                        match event {
+                            ClientEvent::StateChange(_,_) => {},
+                            ClientEvent::Connected => Self::send_request(state)?,
+                            ClientEvent::ConnectionFailed | ClientEvent::Disconnected => {
+                                error!("Failed to connect/disconnected");
+
+                                state.requests.clear();
+                                state.active_request = None;
+                            },
+                            ClientEvent::ResponseComplete => {
+                                if let Some(ref active_request) = state.active_request {
+                                    let (code, content) = match message::decode_response_message(&state.response_writer[..]) {
+                                        Ok(m) => match m.resp_type {
+                                            message::ResponseType::REST { code, body } => {
+                                                (code, body.to_string())
+                                            },
+                                            _ => {
+                                                (400, "Invalid raw/reserved message response".to_string())
+                                            }
+                                        },
+                                        Err(e) => (400, format!("Failed to decode message {:?}", e))
+                                    };
+
+                                    result = Some(proto::Response {
+                                        id: active_request.id,
+                                        code,
+                                        content
+                                    });
+                                }
+
+                                Self::send_request(state)?;
+                            },
+                            ClientEvent::RecvProgress(_) => {},
+                            ClientEvent::SendProgress(_,_) => {}
+                        }
+                    }
+
+                    Ok(result)
+                },
+                Mode::Link(ref mut state) => {
+                    if let Some(frame) = frame {
                         struct Http {
                             client: hyper::Client<hyper::client::HttpConnector, hyper::Body>
                         }
@@ -97,34 +205,27 @@ impl RFNet {
                         }
 
                         let mut http = Http {
-                            client: hyper::Client::new(&self.event_loop.handle())
+                            client: hyper::Client::new(&state.event_loop.handle())
                         };
 
-                        link.recv_data(frame, tnc, &mut http)?;
-                        true
-                    },
-                    Mode::Unconfigured => false
-                }
-            } else {
-                false
-            };
+                        state.link.recv_data(frame, tnc, &mut http)?;
+                    }
 
-            match self.mode {
-                Mode::Node { ref mut node } => node.tick(elapsed, tnc, |_| println!("unimplemented"))?,
-                Mode::Link { ref mut link } => link.elapsed(elapsed, tnc)?,
-                Mode::Unconfigured => {}
+                    state.link.elapsed(elapsed, tnc)?;
+
+                    Ok(None)
+                },
+                Mode::Unconfigured => Ok(None)
             }
-
-            Ok(result)
         } else {
-            Ok(false)
+            Ok(None)
         }
     }
 
     pub fn snapshot(&self) -> proto::Interface {
         let mode = match self.mode {
-            Mode::Node { ref node } => proto::Mode::Node(proto::NodeState::from(node.get_state())),
-            Mode::Link { .. } => proto::Mode::Link,
+            Mode::Node(ref state) => proto::Mode::Node(proto::NodeState::from(state.node.get_state())),
+            Mode::Link(_) => proto::Mode::Link,
             Mode::Unconfigured => proto::Mode::Unconfigured
         };
 
@@ -149,9 +250,17 @@ impl RFNet {
 
         self.mode = match config.mode {
             proto::ConfigureMode::Node => {
-                Mode::Node {
-                    node: Node::new(config.callsign, None, retry_config)
-                }
+                let state = NodeState {
+                    node: Node::new(config.callsign, None, retry_config),
+                    request_reader: io::Cursor::new(vec!()),
+                    response_writer: vec!(),
+                    requests: vec!(),
+                    active_request: None,
+                    private_key: [0; 64],
+                    message_encode_scratch: vec!()
+                };
+
+                Mode::Node(state)
             },
             proto::ConfigureMode::Link(link_config) => {
                 let link_config = LinkConfig {
@@ -162,9 +271,12 @@ impl RFNet {
                     broadcast_rate: link_config.broadcast_rate
                 };
 
-                Mode::Link { 
-                    link: Link::new(config.callsign.as_str(), link_config)
-                }
+                let state = LinkState {
+                    link: Link::new(config.callsign.as_str(), link_config),
+                    event_loop: tokio_core::reactor::Core::new().unwrap()
+                };
+
+                Mode::Link(state)
             }
         }
     }

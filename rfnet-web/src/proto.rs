@@ -1,4 +1,5 @@
 use rfnet_core::node;
+use rfnet_core::message;
 
 use log;
 
@@ -68,10 +69,18 @@ pub enum Mode {
     Unconfigured
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Response {
+    pub id: u32,
+    pub code: u16,
+    pub content: String
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum Message {
     Log(LogLine),
-    InterfaceUpdate(Interface)
+    InterfaceUpdate(Interface),
+    Response(Response)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -103,8 +112,51 @@ pub struct Configuration {
     pub mode: ConfigureMode
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub enum HTTPMethod {
+    GET,
+    PUT,
+    PATCH,
+    POST,
+    DELETE
+}
+
+impl ::std::convert::From<message::RESTMethod> for HTTPMethod {
+    fn from(method: message::RESTMethod) -> HTTPMethod {
+        match method {
+            message::RESTMethod::GET => HTTPMethod::GET,
+            message::RESTMethod::PUT => HTTPMethod::PUT,
+            message::RESTMethod::PATCH => HTTPMethod::PATCH,
+            message::RESTMethod::POST => HTTPMethod::POST,
+            message::RESTMethod::DELETE => HTTPMethod::DELETE
+        }
+    }
+}
+
+impl ::std::convert::From<HTTPMethod> for message::RESTMethod {
+    fn from(method: HTTPMethod) -> message::RESTMethod {
+        match method {
+            HTTPMethod::GET => message::RESTMethod::GET,
+            HTTPMethod::PUT => message::RESTMethod::PUT,
+            HTTPMethod::PATCH => message::RESTMethod::PATCH,
+            HTTPMethod::POST => message::RESTMethod::POST,
+            HTTPMethod::DELETE => message::RESTMethod::DELETE
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Request {
+    pub id: u32,
+    pub addr: String,
+    pub url: String,
+    pub method: HTTPMethod,
+    pub content: String
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum Command {
     ConnectTNC(String),
-    Configure(Configuration)
+    Configure(Configuration),
+    Request(Request)
 }

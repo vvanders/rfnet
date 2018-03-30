@@ -9227,6 +9227,10 @@ var _user$project$Interface$Configuration = F3(
 	function (a, b, c) {
 		return {mode: a, callsign: b, retry: c};
 	});
+var _user$project$Interface$Request = F3(
+	function (a, b, c) {
+		return {url: a, method: b, content: c};
+	});
 var _user$project$Interface$Receiving = {ctor: 'Receiving'};
 var _user$project$Interface$Sending = {ctor: 'Sending'};
 var _user$project$Interface$Established = {ctor: 'Established'};
@@ -9242,6 +9246,11 @@ var _user$project$Interface$ConfigLink = function (a) {
 	return {ctor: 'ConfigLink', _0: a};
 };
 var _user$project$Interface$ConfigNode = {ctor: 'ConfigNode'};
+var _user$project$Interface$DELETE = {ctor: 'DELETE'};
+var _user$project$Interface$PUT = {ctor: 'PUT'};
+var _user$project$Interface$PATCH = {ctor: 'PATCH'};
+var _user$project$Interface$POST = {ctor: 'POST'};
+var _user$project$Interface$GET = {ctor: 'GET'};
 
 var _user$project$Command$Configure = function (a) {
 	return {ctor: 'Configure', _0: a};
@@ -9433,6 +9442,9 @@ var _user$project$Event$decodeInterfaceType = function () {
 var _user$project$Event$Command = function (a) {
 	return {ctor: 'Command', _0: a};
 };
+var _user$project$Event$RequestUpdate = function (a) {
+	return {ctor: 'RequestUpdate', _0: a};
+};
 var _user$project$Event$InterfaceUpdate = function (a) {
 	return {ctor: 'InterfaceUpdate', _0: a};
 };
@@ -9553,6 +9565,14 @@ var _user$project$Main$update = F2(
 						{$interface: _p0._0}),
 					_1: _elm_lang$core$Platform_Cmd$none
 				};
+			case 'RequestUpdate':
+				return {
+					ctor: '_Tuple2',
+					_0: _elm_lang$core$Native_Utils.update(
+						model,
+						{request: _p0._0}),
+					_1: _elm_lang$core$Platform_Cmd$none
+				};
 			default:
 				var _p2 = _p0._0;
 				var _p1 = _p2;
@@ -9579,63 +9599,35 @@ var _user$project$Main$update = F2(
 				}
 		}
 	});
-var _user$project$Main$viewNode = function (state) {
-	return A2(
-		_elm_lang$html$Html$div,
-		{ctor: '[]'},
-		{
-			ctor: '::',
-			_0: _elm_lang$html$Html$text(
-				A2(
-					_elm_lang$core$Basics_ops['++'],
-					'Node - ',
-					_elm_lang$core$Basics$toString(state))),
-			_1: {ctor: '[]'}
-		});
-};
-var _user$project$Main$viewInterface = function ($interface) {
-	var mode = function () {
-		var _p3 = $interface.mode;
-		switch (_p3.ctor) {
-			case 'Node':
-				return _user$project$Main$viewNode(_p3._0);
-			case 'Link':
-				return _elm_lang$html$Html$text('Link');
-			default:
-				return _elm_lang$html$Html$text('Unconfigured');
-		}
-	}();
-	return A2(
-		_elm_lang$html$Html$div,
-		{ctor: '[]'},
-		{
-			ctor: '::',
-			_0: _elm_lang$html$Html$text(
-				A2(_elm_lang$core$Basics_ops['++'], 'TNC: ', $interface.tnc)),
-			_1: {
+var _user$project$Main$textareaInput = F3(
+	function (field, s_value, cmd) {
+		return A2(
+			_elm_lang$html$Html$label,
+			{ctor: '[]'},
+			{
 				ctor: '::',
-				_0: mode,
+				_0: _elm_lang$html$Html$text(field),
 				_1: {
 					ctor: '::',
 					_0: A2(
-						_elm_lang$html$Html$button,
+						_elm_lang$html$Html$textarea,
 						{
 							ctor: '::',
-							_0: _elm_lang$html$Html_Events$onClick(
-								_user$project$Event$Command(
-									_user$project$Command$ConnectTNC('127.0.0.1:8001'))),
-							_1: {ctor: '[]'}
+							_0: _elm_lang$html$Html_Attributes$value(s_value),
+							_1: {
+								ctor: '::',
+								_0: _elm_lang$html$Html_Events$onInput(
+									function (v) {
+										return cmd(v);
+									}),
+								_1: {ctor: '[]'}
+							}
 						},
-						{
-							ctor: '::',
-							_0: _elm_lang$html$Html$text('Connect'),
-							_1: {ctor: '[]'}
-						}),
+						{ctor: '[]'}),
 					_1: {ctor: '[]'}
 				}
-			}
-		});
-};
+			});
+	});
 var _user$project$Main$textInput = F3(
 	function (field, s_value, cmd) {
 		return A2(
@@ -9658,8 +9650,7 @@ var _user$project$Main$textInput = F3(
 									ctor: '::',
 									_0: _elm_lang$html$Html_Events$onInput(
 										function (v) {
-											return _user$project$Event$Command(
-												cmd(v));
+											return cmd(v);
 										}),
 									_1: {ctor: '[]'}
 								}
@@ -9670,15 +9661,189 @@ var _user$project$Main$textInput = F3(
 				}
 			});
 	});
+var _user$project$Main$viewNode = F2(
+	function (state, request) {
+		var modes = {
+			ctor: '::',
+			_0: _user$project$Interface$GET,
+			_1: {
+				ctor: '::',
+				_0: _user$project$Interface$PUT,
+				_1: {
+					ctor: '::',
+					_0: _user$project$Interface$POST,
+					_1: {
+						ctor: '::',
+						_0: _user$project$Interface$PATCH,
+						_1: {
+							ctor: '::',
+							_0: _user$project$Interface$DELETE,
+							_1: {ctor: '[]'}
+						}
+					}
+				}
+			}
+		};
+		var modes_array = _elm_lang$core$Array$fromList(modes);
+		var index_mapper = function (i) {
+			var _p3 = A2(_elm_lang$core$Array$get, i, modes_array);
+			if (_p3.ctor === 'Just') {
+				return _elm_lang$core$Json_Decode$succeed(
+					_user$project$Event$RequestUpdate(
+						_elm_lang$core$Native_Utils.update(
+							request,
+							{method: _p3._0})));
+			} else {
+				return _elm_lang$core$Json_Decode$fail('Invalid index');
+			}
+		};
+		var index_decoder = A2(_elm_lang$core$Json_Decode$andThen, index_mapper, _elm_lang$core$Json_Decode$int);
+		var header = _elm_lang$html$Html$text(
+			A2(
+				_elm_lang$core$Basics_ops['++'],
+				'Node - ',
+				_elm_lang$core$Basics$toString(state)));
+		var content = function () {
+			var _p4 = state;
+			if (_p4.ctor === 'Idle') {
+				return {
+					ctor: '::',
+					_0: header,
+					_1: {
+						ctor: '::',
+						_0: A2(
+							_elm_lang$html$Html$fieldset,
+							{ctor: '[]'},
+							{
+								ctor: '::',
+								_0: A3(
+									_user$project$Main$textInput,
+									'URL',
+									request.url,
+									function (v) {
+										return _user$project$Event$RequestUpdate(
+											_elm_lang$core$Native_Utils.update(
+												request,
+												{url: v}));
+									}),
+								_1: {
+									ctor: '::',
+									_0: A2(
+										_elm_lang$html$Html$label,
+										{ctor: '[]'},
+										{
+											ctor: '::',
+											_0: _elm_lang$html$Html$text('Method'),
+											_1: {
+												ctor: '::',
+												_0: A2(
+													_elm_lang$html$Html$select,
+													{
+														ctor: '::',
+														_0: A2(_elm_lang$html$Html_Events$on, 'change', index_decoder),
+														_1: {ctor: '[]'}
+													},
+													A2(
+														_elm_lang$core$List$map,
+														function (m) {
+															return A2(
+																_elm_lang$html$Html$option,
+																{ctor: '[]'},
+																{
+																	ctor: '::',
+																	_0: _elm_lang$html$Html$text(
+																		_elm_lang$core$Basics$toString(m)),
+																	_1: {ctor: '[]'}
+																});
+														},
+														modes)),
+												_1: {ctor: '[]'}
+											}
+										}),
+									_1: {
+										ctor: '::',
+										_0: A3(
+											_user$project$Main$textareaInput,
+											'Request',
+											request.content,
+											function (v) {
+												return _user$project$Event$RequestUpdate(
+													_elm_lang$core$Native_Utils.update(
+														request,
+														{content: v}));
+											}),
+										_1: {ctor: '[]'}
+									}
+								}
+							}),
+						_1: {ctor: '[]'}
+					}
+				};
+			} else {
+				return {
+					ctor: '::',
+					_0: header,
+					_1: {ctor: '[]'}
+				};
+			}
+		}();
+		return A2(
+			_elm_lang$html$Html$div,
+			{ctor: '[]'},
+			content);
+	});
+var _user$project$Main$viewInterface = F2(
+	function ($interface, request) {
+		var mode = function () {
+			var _p5 = $interface.mode;
+			switch (_p5.ctor) {
+				case 'Node':
+					return A2(_user$project$Main$viewNode, _p5._0, request);
+				case 'Link':
+					return _elm_lang$html$Html$text('Link');
+				default:
+					return _elm_lang$html$Html$text('Unconfigured');
+			}
+		}();
+		return A2(
+			_elm_lang$html$Html$div,
+			{ctor: '[]'},
+			{
+				ctor: '::',
+				_0: _elm_lang$html$Html$text(
+					A2(_elm_lang$core$Basics_ops['++'], 'TNC: ', $interface.tnc)),
+				_1: {
+					ctor: '::',
+					_0: mode,
+					_1: {
+						ctor: '::',
+						_0: A2(
+							_elm_lang$html$Html$button,
+							{
+								ctor: '::',
+								_0: _elm_lang$html$Html_Events$onClick(
+									_user$project$Event$Command(
+										_user$project$Command$ConnectTNC('127.0.0.1:8001'))),
+								_1: {ctor: '[]'}
+							},
+							{
+								ctor: '::',
+								_0: _elm_lang$html$Html$text('Connect'),
+								_1: {ctor: '[]'}
+							}),
+						_1: {ctor: '[]'}
+					}
+				}
+			});
+	});
 var _user$project$Main$floatInput = F3(
 	function (field, f_value, cmd) {
 		var event = function (v) {
-			var _p4 = _elm_lang$core$String$toFloat(v);
-			if (_p4.ctor === 'Ok') {
-				return _user$project$Event$Command(
-					cmd(_p4._0));
+			var _p6 = _elm_lang$core$String$toFloat(v);
+			if (_p6.ctor === 'Ok') {
+				return cmd(_p6._0);
 			} else {
-				return _user$project$Event$DecodeError(_p4._0);
+				return _user$project$Event$DecodeError(_p6._0);
 			}
 		};
 		var changed = _elm_lang$html$Html_Events$onInput(event);
@@ -9715,8 +9880,7 @@ var _user$project$Main$boolInput = F3(
 	function (field, bool_value, cmd) {
 		var changed = _elm_lang$html$Html_Events$onCheck(
 			function (v) {
-				return _user$project$Event$Command(
-					cmd(v));
+				return cmd(v);
 			});
 		return A2(
 			_elm_lang$html$Html$label,
@@ -9749,12 +9913,11 @@ var _user$project$Main$boolInput = F3(
 var _user$project$Main$numberInput = F3(
 	function (field, num_value, cmd) {
 		var event = function (v) {
-			var _p5 = _elm_lang$core$String$toInt(v);
-			if (_p5.ctor === 'Ok') {
-				return _user$project$Event$Command(
-					cmd(_p5._0));
+			var _p7 = _elm_lang$core$String$toInt(v);
+			if (_p7.ctor === 'Ok') {
+				return cmd(_p7._0);
 			} else {
-				return _user$project$Event$DecodeError(_p5._0);
+				return _user$project$Event$DecodeError(_p7._0);
 			}
 		};
 		var changed = _elm_lang$html$Html_Events$onInput(event);
@@ -9802,8 +9965,8 @@ var _user$project$Main$viewConfig = function (config) {
 				config,
 				{mode: _user$project$Interface$ConfigNode})));
 	var mode = function () {
-		var _p6 = config.mode;
-		if (_p6.ctor === 'ConfigNode') {
+		var _p8 = config.mode;
+		if (_p8.ctor === 'ConfigNode') {
 			return A2(
 				_elm_lang$html$Html$div,
 				{ctor: '[]'},
@@ -9813,7 +9976,7 @@ var _user$project$Main$viewConfig = function (config) {
 					_1: {ctor: '[]'}
 				});
 		} else {
-			var _p7 = _p6._0;
+			var _p9 = _p8._0;
 			return A2(
 				_elm_lang$html$Html$div,
 				{ctor: '[]'},
@@ -9825,68 +9988,72 @@ var _user$project$Main$viewConfig = function (config) {
 						_0: A3(
 							_user$project$Main$numberInput,
 							'link_width',
-							_p7.link_width,
+							_p9.link_width,
 							function (v) {
-								return _user$project$Command$Configure(
-									_elm_lang$core$Native_Utils.update(
-										config,
-										{
-											mode: _user$project$Interface$ConfigLink(
-												_elm_lang$core$Native_Utils.update(
-													_p7,
-													{link_width: v}))
-										}));
+								return _user$project$Event$Command(
+									_user$project$Command$Configure(
+										_elm_lang$core$Native_Utils.update(
+											config,
+											{
+												mode: _user$project$Interface$ConfigLink(
+													_elm_lang$core$Native_Utils.update(
+														_p9,
+														{link_width: v}))
+											})));
 							}),
 						_1: {
 							ctor: '::',
 							_0: A3(
 								_user$project$Main$boolInput,
 								'fec',
-								_p7.fec,
+								_p9.fec,
 								function (v) {
-									return _user$project$Command$Configure(
-										_elm_lang$core$Native_Utils.update(
-											config,
-											{
-												mode: _user$project$Interface$ConfigLink(
-													_elm_lang$core$Native_Utils.update(
-														_p7,
-														{fec: v}))
-											}));
+									return _user$project$Event$Command(
+										_user$project$Command$Configure(
+											_elm_lang$core$Native_Utils.update(
+												config,
+												{
+													mode: _user$project$Interface$ConfigLink(
+														_elm_lang$core$Native_Utils.update(
+															_p9,
+															{fec: v}))
+												})));
 								}),
 							_1: {
 								ctor: '::',
 								_0: A3(
 									_user$project$Main$boolInput,
 									'retry',
-									_p7.retry,
+									_p9.retry,
 									function (v) {
-										return _user$project$Command$Configure(
-											_elm_lang$core$Native_Utils.update(
-												config,
-												{
-													mode: _user$project$Interface$ConfigLink(
-														_elm_lang$core$Native_Utils.update(
-															_p7,
-															{retry: v}))
-												}));
+										return _user$project$Event$Command(
+											_user$project$Command$Configure(
+												_elm_lang$core$Native_Utils.update(
+													config,
+													{
+														mode: _user$project$Interface$ConfigLink(
+															_elm_lang$core$Native_Utils.update(
+																_p9,
+																{retry: v}))
+													})));
 									}),
 								_1: {
 									ctor: '::',
 									_0: A3(
 										_user$project$Main$numberInput,
 										'broadcast_rate',
-										_p7.broadcast_rate,
+										_p9.broadcast_rate,
 										function (v) {
-											return _user$project$Command$Configure(
-												_elm_lang$core$Native_Utils.update(
-													config,
-													{
-														mode: _user$project$Interface$ConfigLink(
-															_elm_lang$core$Native_Utils.update(
-																_p7,
-																{broadcast_rate: v}))
-													}));
+											return _user$project$Event$Command(
+												_user$project$Command$Configure(
+													_elm_lang$core$Native_Utils.update(
+														config,
+														{
+															mode: _user$project$Interface$ConfigLink(
+																_elm_lang$core$Native_Utils.update(
+																	_p9,
+																	{broadcast_rate: v}))
+														})));
 										}),
 									_1: {ctor: '[]'}
 								}
@@ -9904,14 +10071,15 @@ var _user$project$Main$viewConfig = function (config) {
 			'bps',
 			config.retry.bps,
 			function (v) {
-				return _user$project$Command$Configure(
-					_elm_lang$core$Native_Utils.update(
-						config,
-						{
-							retry: _elm_lang$core$Native_Utils.update(
-								retry_config,
-								{bps: v})
-						}));
+				return _user$project$Event$Command(
+					_user$project$Command$Configure(
+						_elm_lang$core$Native_Utils.update(
+							config,
+							{
+								retry: _elm_lang$core$Native_Utils.update(
+									retry_config,
+									{bps: v})
+							})));
 			}),
 		_1: {
 			ctor: '::',
@@ -9920,14 +10088,15 @@ var _user$project$Main$viewConfig = function (config) {
 				'bps_scale',
 				config.retry.bps_scale,
 				function (v) {
-					return _user$project$Command$Configure(
-						_elm_lang$core$Native_Utils.update(
-							config,
-							{
-								retry: _elm_lang$core$Native_Utils.update(
-									retry_config,
-									{bps_scale: v})
-							}));
+					return _user$project$Event$Command(
+						_user$project$Command$Configure(
+							_elm_lang$core$Native_Utils.update(
+								config,
+								{
+									retry: _elm_lang$core$Native_Utils.update(
+										retry_config,
+										{bps_scale: v})
+								})));
 				}),
 			_1: {
 				ctor: '::',
@@ -9936,14 +10105,15 @@ var _user$project$Main$viewConfig = function (config) {
 					'delay_ms',
 					config.retry.delay_ms,
 					function (v) {
-						return _user$project$Command$Configure(
-							_elm_lang$core$Native_Utils.update(
-								config,
-								{
-									retry: _elm_lang$core$Native_Utils.update(
-										retry_config,
-										{delay_ms: v})
-								}));
+						return _user$project$Event$Command(
+							_user$project$Command$Configure(
+								_elm_lang$core$Native_Utils.update(
+									config,
+									{
+										retry: _elm_lang$core$Native_Utils.update(
+											retry_config,
+											{delay_ms: v})
+									})));
 					}),
 				_1: {
 					ctor: '::',
@@ -9952,14 +10122,15 @@ var _user$project$Main$viewConfig = function (config) {
 						'retry_attempts',
 						config.retry.retry_attempts,
 						function (v) {
-							return _user$project$Command$Configure(
-								_elm_lang$core$Native_Utils.update(
-									config,
-									{
-										retry: _elm_lang$core$Native_Utils.update(
-											retry_config,
-											{retry_attempts: v})
-									}));
+							return _user$project$Event$Command(
+								_user$project$Command$Configure(
+									_elm_lang$core$Native_Utils.update(
+										config,
+										{
+											retry: _elm_lang$core$Native_Utils.update(
+												retry_config,
+												{retry_attempts: v})
+										})));
 						}),
 					_1: {ctor: '[]'}
 				}
@@ -9981,10 +10152,11 @@ var _user$project$Main$viewConfig = function (config) {
 						'callsign',
 						config.callsign,
 						function (v) {
-							return _user$project$Command$Configure(
-								_elm_lang$core$Native_Utils.update(
-									config,
-									{callsign: v}));
+							return _user$project$Event$Command(
+								_user$project$Command$Configure(
+									_elm_lang$core$Native_Utils.update(
+										config,
+										{callsign: v})));
 						}),
 					_1: {ctor: '[]'}
 				}),
@@ -10085,7 +10257,7 @@ var _user$project$Main$view = function (model) {
 			_0: _user$project$Main$viewConfig(model.config),
 			_1: {
 				ctor: '::',
-				_0: _user$project$Main$viewInterface(model.$interface),
+				_0: A2(_user$project$Main$viewInterface, model.$interface, model.request),
 				_1: {
 					ctor: '::',
 					_0: A2(
@@ -10116,22 +10288,6 @@ var _user$project$Main$view = function (model) {
 			}
 		});
 };
-var _user$project$Main$Request = F3(
-	function (a, b, c) {
-		return {url: a, method: b, content: c};
-	});
-var _user$project$Main$Model = F5(
-	function (a, b, c, d, e) {
-		return {socketAddr: a, log: b, $interface: c, config: d, request: e};
-	});
-var _user$project$Main$Flags = function (a) {
-	return {socket: a};
-};
-var _user$project$Main$DELETE = {ctor: 'DELETE'};
-var _user$project$Main$PUT = {ctor: 'PUT'};
-var _user$project$Main$PATCH = {ctor: 'PATCH'};
-var _user$project$Main$POST = {ctor: 'POST'};
-var _user$project$Main$GET = {ctor: 'GET'};
 var _user$project$Main$init = function (flags) {
 	return {
 		ctor: '_Tuple2',
@@ -10144,7 +10300,7 @@ var _user$project$Main$init = function (flags) {
 				callsign: 'CALLSIGN',
 				retry: {bps: 1200, bps_scale: 1.0, delay_ms: 0, retry_attempts: 5}
 			},
-			request: {url: '', method: _user$project$Main$GET, content: ''}
+			request: {url: '', method: _user$project$Interface$GET, content: ''}
 		},
 		_1: _elm_lang$core$Platform_Cmd$none
 	};
@@ -10158,6 +10314,13 @@ var _user$project$Main$main = _elm_lang$html$Html$programWithFlags(
 				{socket: socket});
 		},
 		A2(_elm_lang$core$Json_Decode$field, 'socket', _elm_lang$core$Json_Decode$string)));
+var _user$project$Main$Model = F5(
+	function (a, b, c, d, e) {
+		return {socketAddr: a, log: b, $interface: c, config: d, request: e};
+	});
+var _user$project$Main$Flags = function (a) {
+	return {socket: a};
+};
 
 var Elm = {};
 Elm['Main'] = Elm['Main'] || {};

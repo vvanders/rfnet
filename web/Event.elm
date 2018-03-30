@@ -9,6 +9,7 @@ type Event =
     DecodeError String
     | Log String
     | InterfaceUpdate Interface
+    | RequestUpdate Request
     | Command Command
 
 decode: String -> Event
