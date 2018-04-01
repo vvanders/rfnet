@@ -102,11 +102,11 @@ fn main() {
                                 use futures::Future;
                                 let mut event_loop = tokio_core::reactor::Core::new().unwrap();
                                 let client = hyper::Client::new(&event_loop.handle());
-                                let req = client.request(request).then(|resp| {
-                                    result = resp;
 
-                                    Ok::<(),hyper::Error>(())
-                                });
+                                let req = client.request(request).then(|resp| {
+                                        result = resp;
+                                        Ok::<(),hyper::Error>(())
+                                    });
 
                                 event_loop.run(req)?;
                             }

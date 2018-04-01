@@ -132,8 +132,6 @@ impl Link {
                     req.set_body(body.to_string());
                 }
 
-                trace!("Req {:?}", &req);
-
                 Ok(req)
             },
             _ => Err("Unsupported request".to_string())

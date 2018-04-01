@@ -22,8 +22,7 @@ struct NodeState {
 }
 
 struct LinkState {
-    link: Link,
-    event_loop: tokio_core::reactor::Core
+    link: Link
 }
 
 enum Mode {
@@ -211,20 +210,30 @@ impl RFNet {
                 },
                 Mode::Link(ref mut state) => {
                     if let Some(frame) = frame {
-                        struct Http {
-                            client: hyper::Client<hyper::client::HttpConnector, hyper::Body>
-                        }
+                        struct Http {}
 
                         impl HttpProvider for Http {
                             fn request(&mut self, request: hyper::Request) -> Result<hyper::Response, hyper::Error> {
-                                use futures::Future;
-                                self.client.request(request).wait()
+                                let mut result = Err(hyper::Error::Incomplete);
+
+                                {
+                                    use futures::Future;
+                                    let mut event_loop = tokio_core::reactor::Core::new().unwrap();
+                                    let client = hyper::Client::new(&event_loop.handle());
+
+                                    let req = client.request(request).then(|resp| {
+                                            result = resp;
+                                            Ok::<(),hyper::Error>(())
+                                        });
+
+                                    event_loop.run(req)?;
+                                }
+
+                                result
                             }
                         }
 
-                        let mut http = Http {
-                            client: hyper::Client::new(&state.event_loop.handle())
-                        };
+                        let mut http = Http {};
 
                         state.link.recv_data(frame, tnc, &mut http)?;
                     }
@@ -291,8 +300,7 @@ impl RFNet {
                 };
 
                 let state = LinkState {
-                    link: Link::new(config.callsign.as_str(), link_config),
-                    event_loop: tokio_core::reactor::Core::new().unwrap()
+                    link: Link::new(config.callsign.as_str(), link_config)
                 };
 
                 Mode::Link(state)
