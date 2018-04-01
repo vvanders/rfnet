@@ -93,12 +93,12 @@ impl RFNet {
         if let Some(ref request) = state.active_request {
             let mut buffer = vec!();
             let msg = message::RequestMessage {
-                sequence_id: 0, //@todo
+                sequence_id: request.id,
                 addr: request.addr.as_str(),
                 req_type: message::RequestType::REST {
                     url: request.url.as_str(),
                     headers: "",
-                    body: request.content.as_str(),
+                    body: request.body.as_str(),
                     method: request.method.clone().into()
                 }
             };
@@ -113,6 +113,50 @@ impl RFNet {
         Ok(())
     }
 
+    fn process_events(events: &mut Vec<ClientEvent>, state: &mut NodeState, out_result: &mut Option<proto::Response>) -> io::Result<()> {
+        for event in events.iter() {
+            match event {
+                &ClientEvent::StateChange(_,_) => {},
+                &ClientEvent::Connected => Self::send_request(state)?,
+                &ClientEvent::ConnectionFailed | &ClientEvent::Disconnected => {
+                    error!("Failed to connect/disconnected");
+
+                    state.requests.clear();
+                    state.active_request = None;
+                },
+                &ClientEvent::ResponseComplete => {
+                    if let Some(ref active_request) = state.active_request {
+                        let (code, content) = match message::decode_response_message(&state.response_writer[..]) {
+                            Ok(m) => match m.resp_type {
+                                message::ResponseType::REST { code, body } => {
+                                    (code, body.to_string())
+                                },
+                                _ => {
+                                    (400, "Invalid raw/reserved message response".to_string())
+                                }
+                            },
+                            Err(e) => (400, format!("Failed to decode message {:?}", e))
+                        };
+
+                        *out_result = Some(proto::Response {
+                            id: active_request.id,
+                            code,
+                            content
+                        });
+                    }
+
+                    Self::send_request(state)?;
+                },
+                &ClientEvent::RecvProgress(_) => {},
+                &ClientEvent::SendProgress(_,_) => {}
+            }
+        }
+
+        events.clear();
+
+        Ok(())
+    }
+
     pub fn update_tnc<'a>(&'a mut self, elapsed: usize) -> io::Result<Option<proto::Response>> {
         if let Some(ref mut tnc) = self.tnc {
             let frame = match tnc {
@@ -121,7 +165,9 @@ impl RFNet {
 
             match self.mode {
                 Mode::Node(ref mut state) => {
+                    let mut result = None;
                     let mut events = vec!();
+
                     {
                         let mut event_handler = |e| events.push(e);
 
@@ -129,65 +175,37 @@ impl RFNet {
                             state.node.on_data(frame, tnc, &mut state.response_writer, &mut state.request_reader, &mut event_handler)?;
                         }
 
-                        let send_request = match state.node.get_state() {
-                            ClientState::Sending | ClientState::Receiving => false,
-                            ClientState::Established => true,
-                            ClientState::Listening | ClientState::Idle | ClientState::Negotiating => false,
-                        };
-
-                        if let Some(_) = state.active_request {
-                            if send_request {
-                                let size = state.request_reader.get_ref().len();
-                                state.node.start_request(&mut state.request_reader, size, tnc, &mut event_handler)?;
-                            } else {
-                                if let ClientState::Idle = state.node.get_state() {
-                                    state.node.connect(tnc, &mut event_handler)?;
-                                }
-                            }
-                        }
-
                         state.node.tick(elapsed, tnc, &mut event_handler)?;
                     }
 
-                    let mut result = None;
+                    Self::process_events(&mut events, state, &mut result)?;
 
-                    for event in events {
-                        match event {
-                            ClientEvent::StateChange(_,_) => {},
-                            ClientEvent::Connected => Self::send_request(state)?,
-                            ClientEvent::ConnectionFailed | ClientEvent::Disconnected => {
-                                error!("Failed to connect/disconnected");
+                    let send_request = match state.node.get_state() {
+                        ClientState::Sending | ClientState::Receiving => false,
+                        ClientState::Established => true,
+                        ClientState::Listening | ClientState::Idle | ClientState::Negotiating => false,
+                    };
 
-                                state.requests.clear();
-                                state.active_request = None;
-                            },
-                            ClientEvent::ResponseComplete => {
-                                if let Some(ref active_request) = state.active_request {
-                                    let (code, content) = match message::decode_response_message(&state.response_writer[..]) {
-                                        Ok(m) => match m.resp_type {
-                                            message::ResponseType::REST { code, body } => {
-                                                (code, body.to_string())
-                                            },
-                                            _ => {
-                                                (400, "Invalid raw/reserved message response".to_string())
-                                            }
-                                        },
-                                        Err(e) => (400, format!("Failed to decode message {:?}", e))
-                                    };
+                    {
+                        let mut event_handler = |e| events.push(e);
 
-                                    result = Some(proto::Response {
-                                        id: active_request.id,
-                                        code,
-                                        content
-                                    });
-                                }
+                        if let Some(_) = state.active_request {
+                            if send_request {
+                                trace!("Starting request");
 
-                                Self::send_request(state)?;
-                            },
-                            ClientEvent::RecvProgress(_) => {},
-                            ClientEvent::SendProgress(_,_) => {}
+                                let size = state.request_reader.get_ref().len();
+                                state.node.start_request(&mut state.request_reader, size, tnc, &mut event_handler)?;
+                            }
+                        } else if state.requests.len() > 0 {
+                            if let ClientState::Idle = state.node.get_state() {
+                                trace!("Connecting");
+
+                                state.node.connect(tnc, &mut event_handler)?;
+                            }
                         }
                     }
+
+                    Self::process_events(&mut events, state, &mut result)?;
 
                     Ok(result)
                 },
@@ -218,6 +236,7 @@ impl RFNet {
                 Mode::Unconfigured => Ok(None)
             }
         } else {
+            ::std::thread::sleep(::std::time::Duration::from_millis(100));
             Ok(None)
         }
     }

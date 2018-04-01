@@ -71,7 +71,7 @@ pub enum Mode {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Response {
-    pub id: u32,
+    pub id: u16,
     pub code: u16,
     pub content: String
 }
@@ -112,7 +112,7 @@ pub struct Configuration {
     pub mode: ConfigureMode
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum HTTPMethod {
     GET,
     PUT,
@@ -145,13 +145,13 @@ impl ::std::convert::From<HTTPMethod> for message::RESTMethod {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Request {
-    pub id: u32,
+    pub id: u16,
     pub addr: String,
     pub url: String,
     pub method: HTTPMethod,
-    pub content: String
+    pub body: String
 }
 
 #[derive(Serialize, Deserialize)]

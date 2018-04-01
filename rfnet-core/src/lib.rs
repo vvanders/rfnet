@@ -6,6 +6,7 @@ extern crate hyper;
 extern crate futures;
 extern crate rand;
 extern crate rust_sodium;
+extern crate base64;
 
 #[cfg(test)]
 extern crate simple_logger;

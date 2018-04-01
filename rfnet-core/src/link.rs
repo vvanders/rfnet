@@ -6,6 +6,7 @@ use message;
 
 use std::io;
 use hyper;
+use base64;
 
 //@todo suspend
 
@@ -110,7 +111,7 @@ impl Link {
 
                 let mut req = hyper::Request::new(method, url);
 
-                req.headers_mut().append_raw("X-rfnet-signature", env.signature);
+                req.headers_mut().append_raw("X-rfnet-signature", base64::encode(env.signature));
                 req.headers_mut().append_raw("X-rfnet-sequence_id", format!("{}", env.msg.sequence_id));
 
                 for header in headers.lines() {
@@ -127,7 +128,11 @@ impl Link {
                     }
                 }
 
-                req.set_body(body.to_string());
+                if body.len() > 0 {
+                    req.set_body(body.to_string());
+                }
+
+                trace!("Req {:?}", &req);
 
                 Ok(req)
             },

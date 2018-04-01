@@ -3,7 +3,8 @@ module Event exposing (Event(..), decode, encodeCmd)
 import Json.Decode exposing (..)
 import Json.Encode as Encode
 import Interface exposing (..)
-import Command exposing(..)
+import Command exposing (..)
+import Random
 
 type Event =
     DecodeError String
@@ -68,13 +69,13 @@ decodeInterface =
 
     map InterfaceUpdate (field "InterfaceUpdate" map_interface)
 
-encodeCmd: Command -> String
-encodeCmd cmd =
+encodeCmd: Command -> Random.Seed -> (String, Random.Seed)
+encodeCmd cmd seed =
     let
-        json_value = 
+        (json_value, new_seed) = 
             case cmd of
                 ConnectTNC(addr) ->
-                    Encode.object [ ("ConnectTNC", Encode.string addr) ]
+                    (Encode.object [ ("ConnectTNC", Encode.string addr) ], seed)
                 Configure(config) ->
                     let
                         config_mode = case config.mode of
@@ -102,7 +103,25 @@ encodeCmd cmd =
                             ("mode", config_mode)
                         ]
                     in
-                        Encode.object [ ("Configure", config_obj) ]
+                        (Encode.object [ ("Configure", config_obj) ], seed)
+                StartRequest request ->
+                    let
+                        (id, next_seed) = Random.step (Random.int 0 65535) seed
+                        method_str = case request.method of
+                            GET -> "GET"
+                            PUT -> "PUT"
+                            POST -> "POST"
+                            PATCH -> "PATCH"
+                            DELETE -> "DELETE"
+                        contents = Encode.object [
+                            ("id", Encode.int id),
+                            ("url", Encode.string request.url),
+                            ("body", Encode.string request.content),
+                            ("addr", Encode.string "KI7EST@rfnet.net"),
+                            ("method", Encode.string method_str)
+                        ]
+                    in
+                        (Encode.object [ ("Request", contents)], next_seed)
     in
-        Encode.encode 0 json_value
+        (Encode.encode 0 json_value, new_seed)
 

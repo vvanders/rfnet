@@ -142,7 +142,12 @@ fn main() {
         }
 
         //@todo: Handle error + calc timeout
-        rfnet.update_tnc(100).unwrap();
+        let response = rfnet.update_tnc(100).unwrap();
+
+        if let Some(response) = response {
+            trace!("Response {:?}", &response);
+            http.broadcast(&Message::Response(response)).unwrap_or(());
+        }
 
         //If snapshot changed send update
         let next_snapshot = rfnet.snapshot();

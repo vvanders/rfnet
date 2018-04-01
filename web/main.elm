@@ -8,13 +8,15 @@ import Interface exposing (..)
 import Command exposing (..)
 import Json.Decode
 import Array
+import Random
 
 type alias Model = {
     socketAddr: String,
     log: List String,
     interface: Interface,
     config: Configuration,
-    request: Request
+    request: Request,
+    seed: Random.Seed
 }
 
 main : Program Flags Model Event
@@ -26,7 +28,8 @@ main =
         view = view}
 
 type alias Flags = {
-    socket: String
+    socket: String,
+    unix_timestamp: Int
 }
 
 init : Flags -> (Model, Cmd Event)
@@ -53,7 +56,8 @@ init flags =
                 url = "",
                 method = GET,
                 content = ""
-            }
+            },
+            seed = Random.initialSeed(flags.unix_timestamp)
         },
         Cmd.none
     )
@@ -189,7 +193,8 @@ viewNode state request =
                             select [ Html.Events.on "change" index_decoder ] (List.map (\m -> option [] [ text (toString m) ]) modes)
                         ],
                         textareaInput "Request" request.content (\v -> RequestUpdate { request | content = v })
-                    ]
+                    ],
+                    button [ onClick (StartRequest request |> Command) ] [ text "Send Request" ]
                 ]
             _ ->
                 [ header ]
@@ -222,11 +227,14 @@ update msg model =
         RequestUpdate request ->
             ({ model | request = request }, Cmd.none)
         Command cmd ->
-            case cmd of 
-                Configure cfg ->
-                    ({ model | config = cfg }, WebSocket.send model.socketAddr (encodeCmd cmd))
-                other -> 
-                    (model, WebSocket.send model.socketAddr (encodeCmd cmd))
+            let
+                (encoded, next_seed) = encodeCmd cmd model.seed
+            in
+                case cmd of 
+                    Configure cfg ->
+                        ({ model | config = cfg, seed = next_seed }, WebSocket.send model.socketAddr encoded)
+                    other -> 
+                        ({ model | seed = next_seed }, WebSocket.send model.socketAddr encoded)
 
 
 subscriptions : Model -> Sub Event

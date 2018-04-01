@@ -13,7 +13,7 @@ use std::thread;
 use std::io::{Read, Write};
 
 enum Event {
-    Data([u8; 256], usize),
+    Data(Vec<u8>),
     ClientConnected(usize, net::TcpStream),
     ClientDisconnected(usize),
     Exit
@@ -30,8 +30,6 @@ fn main() {
         broadcast_rate: Some(5)
     };
     let mut link = Link::new("CALLSIGN", config);
-
-    let event_loop = tokio_core::reactor::Core::new().unwrap();
 
     let listen = net::TcpListener::bind("127.0.0.1:8001").unwrap();
     let (send, recv) = mpsc::channel();
@@ -74,9 +72,16 @@ fn main() {
                     thread::spawn(move || {
                         println!("Client {} connected", id);
 
-                        let mut buffer = [0; 256];
-                        while let Ok(read) = client_socket.read(&mut buffer) {
-                            client_send.send(Event::Data(buffer, read)).unwrap();
+                        let mut scratch = [0; 256];
+                        let mut buffer = KISSFramed::new(LoopbackIo::new(), 0);
+                        let mut scratch_vec = vec!();
+                        while let Ok(read) = client_socket.read(&mut scratch) {
+                            buffer.get_tnc_mut().buffer_mut().extend_from_slice(&scratch[..read]);
+
+                            use rfnet_core::framed::FramedRead;
+                            if let Ok(Some(frame)) = buffer.read_frame(&mut scratch_vec) {
+                                client_send.send(Event::Data(frame.to_vec())).unwrap();
+                            }
                         }
 
                         println!("Client {} exited", id);
@@ -86,24 +91,34 @@ fn main() {
                 Event::ClientDisconnected(id) => {
                     clients.retain(|&(vid,_)| vid != id);
                 },
-                Event::Data(mut data, size) => {
-                    struct Http {
-                        client: hyper::Client<hyper::client::HttpConnector, hyper::Body>
-                    }
+                Event::Data(mut data) => {
+                    struct Http {}
 
                     impl HttpProvider for Http {
                         fn request(&mut self, request: hyper::Request) -> Result<hyper::Response, hyper::Error> {
-                            use futures::Future;
-                            self.client.request(request).wait()
+                            let mut result = Err(hyper::Error::Incomplete);
+                            
+                            {
+                                use futures::Future;
+                                let mut event_loop = tokio_core::reactor::Core::new().unwrap();
+                                let client = hyper::Client::new(&event_loop.handle());
+                                let req = client.request(request).then(|resp| {
+                                    result = resp;
+
+                                    Ok::<(),hyper::Error>(())
+                                });
+
+                                event_loop.run(req)?;
+                            }
+
+                            result
                         }
                     }
 
-                    let mut http = Http {
-                        client: hyper::Client::new(&event_loop.handle())
-                    };
+                    let mut http = Http {};
 
                     let mut output = KISSFramed::new(LoopbackIo::new(), 0);
-                    link.recv_data(&mut data[..size], &mut output, &mut http).unwrap();
+                    link.recv_data(&mut data[..], &mut output, &mut http).unwrap();
 
                     if output.get_tnc().buffer().len() > 0 {
                         for &mut (_id, ref mut client) in &mut clients {
