@@ -248,8 +248,10 @@ impl Inner {
             Event::Data { packet, .. } => {
                 let new_state = match &packet.0 {
                     &Packet::Broadcast(ref broadcast) => {
-                        self.config = Some(link_config_from_broadcast(broadcast));
+                        let config = link_config_from_broadcast(broadcast);
                         info!("Heard broadcast packet from {}, channel is idle", String::from_utf8_lossy(broadcast.callsign));
+                        info!("Link configuration is {:?}", &config);
+                        self.config = Some(config);
                         Some(State::Idle)
                     },
                     &Packet::Control(ref ctrl) => match ctrl.ctrl_type {
