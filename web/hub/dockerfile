@@ -1,0 +1,9 @@
+FROM elixir:alpine
+ADD ./rfnet_hub /app
+WORKDIR /app
+RUN mix local.hex --force
+RUN mix archive.install --force https://github.com/phoenixframework/archives/raw/master/phx_new.ez
+RUN mix deps.get --force
+RUN mix local.rebar --force
+EXPOSE 4000
+CMD mix ecto.create && mix phx.server
