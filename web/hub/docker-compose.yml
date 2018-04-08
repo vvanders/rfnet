@@ -1,7 +1,13 @@
 version: '3.2'
 services:
+  sign:
+    build:
+      context: .
+      dockerfile: ./dockerfile-sign
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: ./dockerfile-phx
     volumes:
       - type: bind
         source: ./rfnet_hub
@@ -10,5 +16,6 @@ services:
       - "4000:4000"
     depends_on:
       - db
+      - sign
   db:
     image: postgres

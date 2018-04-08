@@ -1,0 +1,6 @@
+FROM rust:latest
+ADD ./sign /app
+WORKDIR /app
+RUN cargo install
+EXPOSE 80
+CMD rfnet_sign

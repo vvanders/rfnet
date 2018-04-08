@@ -1,4 +1,5 @@
 FROM elixir:alpine
+RUN apk update && apk add -f inotify-tools
 ADD ./rfnet_hub /app
 WORKDIR /app
 RUN mix local.hex --force
