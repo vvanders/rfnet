@@ -93,7 +93,7 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R)
         RESTMethod::GET,
         "http://www.rfnet.net/test", 
         "", 
-        "BODY",
+        b"BODY",
         &[0;64]).unwrap();
 
     let mut send_idx = 0;
@@ -133,7 +133,7 @@ fn cycle_data<S,R>(mut drop_send_fn: S, mut drop_recv_fn: R)
     let response = ResponseMessage {
         resp_type: ResponseType::REST {
             code: 200,
-            body: "Response"
+            body: b"Response"
         }
     };
 

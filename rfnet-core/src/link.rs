@@ -129,7 +129,7 @@ impl Link {
                 }
 
                 if body.len() > 0 {
-                    req.set_body(body.to_string());
+                    req.set_body(body.to_vec());
                 }
 
                 Ok(req)
@@ -138,7 +138,7 @@ impl Link {
         }
     }
 
-    fn encode_response(code: u16, body: &str) -> Option<Vec<u8>> {
+    fn encode_response(code: u16, body: &[u8]) -> Option<Vec<u8>> {
         let response = message::ResponseMessage {
             resp_type: message::ResponseType::REST {
                 code,
@@ -170,20 +170,17 @@ impl Link {
                                 let body = resp.body().concat2().wait();
 
                                 match body {
-                                    Ok(body) => match ::std::str::from_utf8(body.as_ref()) {
-                                        Ok(body) => Self::encode_response(code, body),
-                                        Err(e) => Self::encode_response(code, format!("Unable to decode UTF response {:?}", e).as_str())
-                                    }
-                                    Err(e) => Self::encode_response(500, format!("Error during http request {:?}", e).as_str())
+                                    Ok(body) => Self::encode_response(code, &body),
+                                    Err(e) => Self::encode_response(500, format!("Error during http request {:?}", e).as_str().as_bytes())
                                 }
                             },
-                            Err(e) => Self::encode_response(500, format!("Unable to issue http request {:?}", e).as_str())
+                            Err(e) => Self::encode_response(500, format!("Unable to issue http request {:?}", e).as_str().as_bytes())
                         }
                     },
-                    Err(e) => Self::encode_response(500, e.as_str())
+                    Err(e) => Self::encode_response(500, e.as_str().as_bytes())
                 }
             },
-            Err(e) => Self::encode_response(500, format!("Error when decoding message {:?}", e).as_str())
+            Err(e) => Self::encode_response(500, format!("Error when decoding message {:?}", e).as_str().as_bytes())
         }
     }
 
@@ -625,7 +622,7 @@ mod test {
                     method: message:: RESTMethod::GET,
                     url: "http://rfnet.net/test",
                     headers: "header1: foo\r\nheader2: bar",
-                    body: "Body"
+                    body: b"Body"
                 }
             }, &[0; 64], &mut vec!(), &mut payload).unwrap();
 
@@ -710,7 +707,7 @@ mod test {
         match http_response.resp_type {
             message::ResponseType::REST { code, body } => {
                 assert_eq!(code, 200);
-                assert_eq!(body, "Test");
+                assert_eq!(body, b"Test");
             },
             o => panic!("{:?}", o)
         }

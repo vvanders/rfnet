@@ -22,14 +22,14 @@ pub enum RESTMethod {
 #[derive(PartialEq, Debug)]
 pub enum RequestType<'a> {
     Reserved,
-    REST { method: RESTMethod, url: &'a str, headers: &'a str, body: &'a str },
+    REST { method: RESTMethod, url: &'a str, headers: &'a str, body: &'a [u8] },
     Raw(&'a [u8])
 }
 
 #[derive(PartialEq, Debug)]
 pub enum ResponseType<'a> {
     Reserved,
-    REST { code: u16, body: &'a str },
+    REST { code: u16, body: &'a [u8] },
     Raw(&'a [u8])
 }
 
@@ -128,7 +128,7 @@ pub fn decode_request_message<'a>(data: &'a [u8]) -> io::Result<RequestEnvelope<
             let (method, mut data_read) = decode_rest_method(payload)?;
             let url = decode_null_delim_str(payload, &mut data_read)?;
             let headers = decode_null_delim_str(payload, &mut data_read)?;
-            let body = decode_str_slice(&payload[data_read..])?;
+            let body = &payload[data_read..];
 
             RequestType::REST { method, url, headers, body }
         }
@@ -162,7 +162,7 @@ pub fn decode_response_message<'a>(data: &'a [u8]) -> io::Result<ResponseMessage
         MessageType::Raw => ResponseType::Raw(payload),
         MessageType::REST => {
             let code = io::Cursor::new(&payload[..2]).read_u16::<BigEndian>()?;
-            let body = decode_str_slice(&payload[2..])?;
+            let body = &payload[2..];
 
             ResponseType::REST { code, body }
         }
@@ -242,7 +242,7 @@ fn encode_request_inner<W>(msg: &RequestMessage, writer: &mut W) -> io::Result<(
 
             encode_str(url, writer)?;
             encode_str(headers, writer)?;
-            writer.write_all(body.as_bytes())?;
+            writer.write_all(body)?;
         }
     }
 
@@ -261,7 +261,7 @@ pub fn encode_response_message<W>(msg: &ResponseMessage, writer: &mut W) -> io::
         ResponseType::REST { code, ref body } => {
             writer.write_all(&[encode_type(MessageType::REST)])?;
             writer.write_u16::<BigEndian>(code)?;
-            writer.write_all(body.as_bytes())?;
+            writer.write_all(body)?;
         }
     }
 
@@ -274,7 +274,7 @@ fn test_request() {
 
     let url = "http://rfnet.net/v1/endpoint";
     let headers = "key: value\nkey2: value2";
-    let body = "body";
+    let body = b"body";
 
     let req = RequestMessage {
         sequence_id: 1000,
@@ -300,7 +300,7 @@ fn test_verify() {
 
     let url = "http://rfnet.net/v1/endpoint";
     let headers = "key: value\nkey2: value2";
-    let body = "body";
+    let body = b"body";
 
     let req = RequestMessage {
         sequence_id: 1000,
@@ -337,7 +337,7 @@ fn test_response() {
     let resp = ResponseMessage {
         resp_type: ResponseType::REST {
             code: 200,
-            body: "OK"
+            body: b"OK"
         }
     };
 

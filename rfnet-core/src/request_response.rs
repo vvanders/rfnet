@@ -36,7 +36,7 @@ impl RequestResponse {
             method: message::RESTMethod,
             url: &str,
             headers: &str,
-            body: &str,
+            body: &[u8],
             private_key: &[u8]) -> io::Result<()> {
         self.request.data.clear();
         self.request.position = 0;

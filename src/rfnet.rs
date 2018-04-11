@@ -97,7 +97,7 @@ impl RFNet {
                 req_type: message::RequestType::REST {
                     url: request.url.as_str(),
                     headers: "",
-                    body: request.body.as_str(),
+                    body: request.body.as_str().as_bytes(),
                     method: request.method.clone().into()
                 }
             };
@@ -127,8 +127,9 @@ impl RFNet {
                     if let Some(ref active_request) = state.active_request {
                         let (code, content) = match message::decode_response_message(&state.response_writer[..]) {
                             Ok(m) => match m.resp_type {
-                                message::ResponseType::REST { code, body } => {
-                                    (code, body.to_string())
+                                message::ResponseType::REST { code, body } => match ::std::str::from_utf8(body) {
+                                        Ok(body) => (code, body.to_string()),
+                                        Err(e) => (400, format!("Invalid UTF-8 {:?}", e))
                                 },
                                 _ => {
                                     (400, "Invalid raw/reserved message response".to_string())

@@ -858,7 +858,7 @@ mod test {
                 RESTMethod::GET,
                 "http://www.rfnet.net/test", 
                 "", 
-                "BODY",
+                b"BODY",
                 &[0;64]).unwrap();
 
             let data_len = rr.request.get_data().len();
@@ -945,7 +945,7 @@ mod test {
                 RESTMethod::GET,
                 "http://www.rfnet.net/test", 
                 "", 
-                "BODY",
+                b"BODY",
                 &[0;64]).unwrap();
 
             let data_len = rr.request.get_data().len();
