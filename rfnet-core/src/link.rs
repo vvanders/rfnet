@@ -113,6 +113,7 @@ impl Link {
 
                 req.headers_mut().append_raw("X-rfnet-signature", base64::encode(env.signature));
                 req.headers_mut().append_raw("X-rfnet-sequence_id", format!("{}", env.msg.sequence_id));
+                req.headers_mut().append_raw("X-rfnet-sender", env.msg.addr);
 
                 for header in headers.lines() {
                     let mut parsed = header.splitn(2, ":");

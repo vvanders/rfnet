@@ -6,7 +6,7 @@ defmodule RfnetHub.Repo.Migrations.CreatePublicKeys do
       add :key, :binary
       add :name, :string
       add :last_used, :date
-      add :user_id, references(:users, on_delete: :nothing)
+      add :user_id, references(:users, on_delete: :delete_all)
 
       timestamps()
     end

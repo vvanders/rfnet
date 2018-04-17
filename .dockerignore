@@ -1,0 +1,9 @@
+**/build/*
+**/target/*
+.vscode
+docs
+elm-stuff
+rfnet-web
+src
+static-web
+tools

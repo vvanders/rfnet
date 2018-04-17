@@ -7,4 +7,4 @@ RUN mix archive.install --force https://github.com/phoenixframework/archives/raw
 RUN mix deps.get --force
 RUN mix local.rebar --force
 EXPOSE 4000
-CMD mix ecto.create && mix phx.server
+CMD mix ecto.create && mix ecto.migrate && mix phx.server

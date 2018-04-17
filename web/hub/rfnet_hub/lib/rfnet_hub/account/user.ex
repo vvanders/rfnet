@@ -17,6 +17,8 @@ defmodule RfnetHub.Account.User do
   def changeset(user, attrs) do
     user
     |> cast(attrs, [:callsign, :email, :password, :has_password, :verified])
+    |> unique_constraint(:callsign)
+    |> unique_constraint(:email)
     |> validate_required([:callsign, :email, :password, :has_password, :verified])
   end
 end

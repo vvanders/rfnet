@@ -2,8 +2,12 @@ version: '3.2'
 services:
   sign:
     build:
-      context: .
-      dockerfile: ./dockerfile-sign
+      context: ../../
+      dockerfile: ./web/hub/dockerfile-sign
+    volumes:
+      - type: bind
+        source: ./web/hub/sign
+        target: /app/web/hub/sign
   web:
     build:
       context: .

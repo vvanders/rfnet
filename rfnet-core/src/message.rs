@@ -204,7 +204,7 @@ fn encode_str<W>(s: &str, writer: &mut W) -> io::Result<()> where W: io::Write {
 
 pub fn encode_request_message<W>(msg: &RequestMessage, key: &[u8], scratch: &mut Vec<u8>, writer: &mut W) -> io::Result<()> where W: io::Write {
     scratch.clear();
-    encode_request_inner(msg, scratch)?;
+    encode_request_payload(msg, scratch)?;
 
     let key = sign::SecretKey::from_slice(key);
 
@@ -218,7 +218,7 @@ pub fn encode_request_message<W>(msg: &RequestMessage, key: &[u8], scratch: &mut
     writer.write_all(&scratch[..])
 }
 
-fn encode_request_inner<W>(msg: &RequestMessage, writer: &mut W) -> io::Result<()> where W: io::Write {
+pub fn encode_request_payload<W>(msg: &RequestMessage, writer: &mut W) -> io::Result<()> where W: io::Write {
     encode_str(msg.addr, writer)?;
     writer.write_u16::<BigEndian>(msg.sequence_id)?;
     match msg.req_type {

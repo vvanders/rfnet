@@ -1,6 +1,10 @@
 FROM rust:latest
-ADD ./sign /app
-WORKDIR /app
+CMD apt-get update
+CMD apt-get install libsodium18
+ADD ./web/hub/sign /app/web/hub/sign
+ADD ./rfnet-core /app/rfnet-core
+WORKDIR /app/web/hub/sign
+RUN cargo test --release
 RUN cargo install
 EXPOSE 80
 CMD rfnet_sign

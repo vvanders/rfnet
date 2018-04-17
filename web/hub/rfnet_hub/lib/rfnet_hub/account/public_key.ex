@@ -15,7 +15,7 @@ defmodule RfnetHub.Account.PublicKey do
   @doc false
   def changeset(public_key, attrs) do
     public_key
-    |> cast(attrs, [:key, :name, :last_used])
+    |> cast(attrs, [:key, :name, :last_used, :user_id])
     |> validate_required([:key, :name, :last_used])
   end
 end

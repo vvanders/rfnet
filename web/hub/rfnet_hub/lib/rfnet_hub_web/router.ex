@@ -6,9 +6,10 @@ defmodule RfnetHubWeb.Router do
   end
 
   scope "/api/v1", RfnetHubWeb do
-    pipe_through :api
+    # pipe_through :api
 
     resources "/users", UserController, except: [:new, :edit]
+    get "/users/:callsign/keys", PublicKeyController, :user_keys
     resources "/public_keys", PublicKeyController, except: [:new, :edit]
   end
 end

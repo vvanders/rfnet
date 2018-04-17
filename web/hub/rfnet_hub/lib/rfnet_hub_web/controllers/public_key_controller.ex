@@ -39,4 +39,9 @@ defmodule RfnetHubWeb.PublicKeyController do
       send_resp(conn, :no_content, "")
     end
   end
+
+  def user_keys(conn, %{"callsign" => callsign}) do
+    public_keys = Account.list_public_keys(callsign)
+    render(conn, "index.json", public_keys: public_keys)
+  end
 end

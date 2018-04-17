@@ -7,6 +7,7 @@ defmodule RfnetHub.Account do
   alias RfnetHub.Repo
 
   alias RfnetHub.Account.User
+  alias RfnetHub.Account.PublicKey
 
   @doc """
   Returns the list of users.
@@ -49,10 +50,21 @@ defmodule RfnetHub.Account do
       {:error, %Ecto.Changeset{}}
 
   """
-  def create_user(attrs \\ %{}) do
-    %User{}
-    |> User.changeset(attrs)
-    |> Repo.insert()
+  def create_user(user_attrs \\ %{}, key_attrs \\ %{}) do
+    user = %User{}
+        |> User.changeset(user_attrs)
+    key = %PublicKey{}
+        |> PublicKey.changeset(key_attrs)
+
+    Ecto.Multi.new()
+        |> Ecto.Multi.insert(:user, user)
+        |> Ecto.Multi.run(:key, fn %{user: user} ->
+                key
+                    |> Ecto.Changeset.put_change(:user_id, user.id)
+                    |> Repo.insert
+            end)
+        # |> Ecto.Multi.insert(:key, key)
+        |> Repo.transaction
   end
 
   @doc """
@@ -102,7 +114,6 @@ defmodule RfnetHub.Account do
     User.changeset(user, %{})
   end
 
-  alias RfnetHub.Account.PublicKey
 
   @doc """
   Returns the list of public_keys.
@@ -115,6 +126,10 @@ defmodule RfnetHub.Account do
   """
   def list_public_keys do
     Repo.all(PublicKey)
+  end
+
+  def list_public_keys(callsign) do
+    Repo.all(from k in PublicKey, join: u in User, where: k.user_id == u.id and u.callsign == ^callsign)
   end
 
   @doc """

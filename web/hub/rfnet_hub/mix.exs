@@ -38,7 +38,9 @@ defmodule RfnetHub.Mixfile do
       {:phoenix_ecto, "~> 3.2"},
       {:postgrex, ">= 0.0.0"},
       {:gettext, "~> 0.11"},
-      {:cowboy, "~> 1.0"}
+      {:cowboy, "~> 1.0"},
+      {:httpotion, "~> 3.1.0"},
+      {:poison, "~> 3.1"}
     ]
   end
 
